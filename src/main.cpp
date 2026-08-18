@@ -16,6 +16,7 @@
 
 #include "asm/assembler.hpp"
 #include "cmd/repl.hpp"
+#include "tui/app.hpp"
 #include "asm/diag_render.hpp"
 #include "core/hart.hpp"
 #include "core/memfile.hpp"
@@ -39,6 +40,7 @@ void print_usage() {
         "  exec <word>...        execute raw instruction words given as hex\n"
         "  test <file.s>...      run self-checking assembly tests\n"
         "  dbg <file.s>          open the interactive debugger\n"
+        "  tui <file.s>          open the full-screen debugger\n"
         "  --version, --help\n"
         "\n"
         "options:\n"
@@ -66,6 +68,9 @@ struct Options {
     /// Emit the teaching notes (the 'la' sizing explanation). Useful while
     /// learning, pure noise in a test runner.
     bool explain = true;
+    /// Draw one frame to stdout and exit -- the escape hatch for debugging the
+    /// tui itself, since a curses application owns stdout.
+    bool render_once = false;
     std::vector<std::string> positional;
 };
 
@@ -83,6 +88,8 @@ bool parse_options(const std::vector<std::string>& args, Options& out) {
             out.pad = true;
         } else if (arg == "--annotate") {
             out.annotate = true;
+        } else if (arg == "--render-once") {
+            out.render_once = true;
         } else if (arg == "--strict-word-mem") {
             out.strict_word_mem = true;
         } else if (arg == "--limit" || arg == "--dmem" || arg == "-o") {
@@ -362,6 +369,42 @@ int command_dbg(const std::vector<std::string>& args) {
     return repl.run(std::cin, std::cout);
 }
 
+int command_tui(const std::vector<std::string>& args) {
+    Options options;
+    if (!parse_options(args, options)) return 2;
+    if (options.positional.size() != 1) {
+        std::fprintf(stderr, "rv32: tui needs exactly one source file\n");
+        return 2;
+    }
+
+    std::ifstream file(options.positional[0], std::ios::binary);
+    if (!file) {
+        std::fprintf(stderr, "rv32: cannot open '%s'\n", options.positional[0].c_str());
+        return 1;
+    }
+    std::ostringstream contents;
+    contents << file.rdbuf();
+
+    dbg::DebugSession session;
+    as::AssembleOptions assemble_options;
+    assemble_options.strict_word_mem = options.strict_word_mem;
+    assemble_options.explain_pseudo_sizing = options.explain;
+
+    if (!session.load_source(contents.str(), options.positional[0], assemble_options)) {
+        as::RenderOptions render_options;
+        render_options.color = isatty(fileno(stderr)) != 0;
+        std::fputs(as::render_all(session.program().diagnostics, session.source(), render_options)
+                       .c_str(),
+                   stderr);
+        return 1;
+    }
+
+    tui::TuiOptions tui_options;
+    tui_options.app.numeric_registers = options.numeric;
+    tui_options.render_once = options.render_once;
+    return tui::run_tui(session, tui_options);
+}
+
 int command_exec(const std::vector<std::string>& args) {
     Options options;
     options.limit = 1000;
@@ -482,6 +525,7 @@ int main(int argc, char** argv) {
     if (args[0] == "asm") return command_asm(rest);
     if (args[0] == "test") return command_test(rest);
     if (args[0] == "dbg") return command_dbg(rest);
+    if (args[0] == "tui") return command_tui(rest);
     if (args[0] == "exec") return command_exec(rest);
     if (args[0] == "run") return command_run(rest);
     if (args[0] == "dis") return command_dis(rest);
