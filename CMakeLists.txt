@@ -43,10 +43,25 @@ target_link_libraries(rv_core PUBLIC rv_isa)
 rv_set_warnings(rv_core)
 
 # ---------------------------------------------------------------------------
+# rv_asm -- lexer, parser, assembler. Depends on rv_core because it produces
+# images for a specific machine: it needs the memory sizes to report "program
+# too large", and it emits the same .mem format the runner consumes.
+# ---------------------------------------------------------------------------
+add_library(rv_asm STATIC
+    src/asm/source.cpp
+    src/asm/diagnostic.cpp
+    src/asm/diag_render.cpp
+    src/asm/directive.cpp
+    src/asm/lexer.cpp
+)
+target_link_libraries(rv_asm PUBLIC rv_core)
+rv_set_warnings(rv_asm)
+
+# ---------------------------------------------------------------------------
 # rv32 -- the front-end binary.
 # ---------------------------------------------------------------------------
 add_executable(rv32 src/main.cpp)
-target_link_libraries(rv32 PRIVATE rv_core)
+target_link_libraries(rv32 PRIVATE rv_asm)
 rv_set_warnings(rv32)
 
 # ---------------------------------------------------------------------------
@@ -65,12 +80,15 @@ add_executable(rv_tests
     tests/unit_exec_m.cpp
     tests/unit_csr_trap.cpp
     tests/unit_memfile.cpp
+    tests/unit_lexer.cpp
+    tests/unit_diag_render.cpp
 )
-target_link_libraries(rv_tests PRIVATE rv_core)
+target_link_libraries(rv_tests PRIVATE rv_asm)
 target_include_directories(rv_tests PRIVATE tests)
 rv_set_warnings(rv_tests)
 
 # One CTest entry per suite, so a failure can be re-run in isolation.
-foreach(suite fields decode roundtrip exec_alu exec_mem exec_branch exec_m csr_trap memfile)
+foreach(suite fields decode roundtrip exec_alu exec_mem exec_branch exec_m csr_trap memfile
+              lexer diag_render)
     add_test(NAME unit.${suite} COMMAND rv_tests --filter=${suite})
 endforeach()
