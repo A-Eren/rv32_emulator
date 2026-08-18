@@ -25,6 +25,7 @@ void Hart::take_trap(TrapCause cause, u32 tval, Addr epc, StepOutcome& out) {
     out.trapped = true;
     out.cause = cause;
     out.tval = tval;
+    out.touched_many_csrs = true;  // mepc, mcause, mtval and mstatus all change
 
     const u32 mtvec = cpu_.csr.read(kMtvec);
     if (mtvec == 0) {
@@ -54,6 +55,10 @@ StepOutcome Hart::step() {
     StepOutcome out;
     out.pc_before = cpu_.pc;
     out.pc_after = cpu_.pc;
+    out.cycle_before = cpu_.cycle;
+    out.instret_before = cpu_.instret;
+    out.uart_length_before = bus_.uart().output().size();
+    out.leds_before = bus_.leds().value();
 
     if (halted()) {
         out.halt = halt_reason_;
@@ -86,8 +91,16 @@ StepOutcome Hart::step() {
     // ---- execute ----
     const ExecResult result = execute(cpu_, bus_, out.instr, ebreak_behavior_);
     out.reg_written = result.reg_written;
+    out.reg_old = result.reg_old;
+    out.csr_written = result.csr_written;
+    out.wrote_csr = result.wrote_csr;
+    out.csr_old = result.csr_old;
     out.mem_written = result.mem_written;
     out.mem_width = result.mem_width;
+    out.mem_old = result.mem_old;
+    // mret rewrites mstatus wholesale alongside jumping, so it needs the same
+    // full-snapshot treatment as trap entry.
+    if (out.instr.id == isa::InstrId::MRET) out.touched_many_csrs = true;
 
     ++cpu_.cycle;
     bus_.cycles().set_cycles(cpu_.cycle);

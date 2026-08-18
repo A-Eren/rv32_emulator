@@ -63,10 +63,22 @@ target_link_libraries(rv_asm PUBLIC rv_core)
 rv_set_warnings(rv_asm)
 
 # ---------------------------------------------------------------------------
+# rv_dbg -- the debugger engine: breakpoints, stepping, reverse step. The one
+# facade the CLI, the TUI and the tests all talk to.
+# ---------------------------------------------------------------------------
+add_library(rv_dbg STATIC
+    src/dbg/history.cpp
+    src/dbg/breakpoints.cpp
+    src/dbg/session.cpp
+)
+target_link_libraries(rv_dbg PUBLIC rv_asm)
+rv_set_warnings(rv_dbg)
+
+# ---------------------------------------------------------------------------
 # rv32 -- the front-end binary.
 # ---------------------------------------------------------------------------
 add_executable(rv32 src/main.cpp)
-target_link_libraries(rv32 PRIVATE rv_asm)
+target_link_libraries(rv32 PRIVATE rv_dbg)
 rv_set_warnings(rv32)
 
 # ---------------------------------------------------------------------------
@@ -89,7 +101,7 @@ add_executable(rv_tests
     tests/unit_diag_render.cpp
     tests/unit_assembler.cpp
 )
-target_link_libraries(rv_tests PRIVATE rv_asm)
+target_link_libraries(rv_tests PRIVATE rv_dbg)
 target_include_directories(rv_tests PRIVATE tests)
 rv_set_warnings(rv_tests)
 

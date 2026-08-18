@@ -22,13 +22,26 @@ struct ExecResult {
 
     HaltReason halt = HaltReason::None;
 
-    // What this instruction touched. Feeds the execution trace and the
-    // register/memory diff highlighting, and is what the reverse-step delta
-    // will be built from -- the executor already knows, so nothing has to be
-    // recovered later by diffing the whole machine.
+    // What this instruction touched, and what was there before.
+    //
+    // RV32 has a property that makes this cheap: an instruction writes at most
+    // one register, at most one CSR and at most one memory location. So a
+    // fixed-size record is a complete inverse, and the executor -- which
+    // already knows what it wrote -- fills it in for free. Nothing has to be
+    // recovered afterwards by diffing 32 registers and 16 KB of memory.
     RegIdx reg_written = kNoReg;
+    u32 reg_old = 0;
+
+    CsrAddr csr_written = 0;
+    bool wrote_csr = false;
+    u32 csr_old = 0;
+
     Addr mem_written = kNoAddr;
     u8 mem_width = 0;
+    /// The whole pre-image word at the aligned address. Storing the full word
+    /// rather than just the changed bytes makes undoing an sb or sh trivially
+    /// correct, with no byte-mask bookkeeping.
+    u32 mem_old = 0;
 };
 
 ExecResult execute(CpuState& cpu, Bus& bus, const isa::DecodedInstr& instr,

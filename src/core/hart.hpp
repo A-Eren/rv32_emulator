@@ -27,9 +27,32 @@ struct StepOutcome {
 
     HaltReason halt = HaltReason::None;
 
+    // What changed, and what was there before -- see ExecResult for why this
+    // is cheap to collect and what it is for.
     RegIdx reg_written = kNoReg;
+    u32 reg_old = 0;
+
+    CsrAddr csr_written = 0;
+    bool wrote_csr = false;
+    u32 csr_old = 0;
+
     Addr mem_written = kNoAddr;
     u8 mem_width = 0;
+    u32 mem_old = 0;
+
+    /// Set when the step entered a trap handler or returned from one. Those
+    /// touch several CSRs at once, which does not fit the single-CSR record;
+    /// the history takes a whole CsrFile copy instead. Traps are rare enough
+    /// that widening the common case to accommodate them would be the wrong
+    /// trade.
+    bool touched_many_csrs = false;
+
+    u64 cycle_before = 0;
+    u64 instret_before = 0;
+    /// UART output length before the step, so undo can drop bytes that a
+    /// buffered console has not really sent anywhere.
+    std::size_t uart_length_before = 0;
+    u32 leds_before = 0;
 };
 
 class Hart {

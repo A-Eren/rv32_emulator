@@ -24,8 +24,11 @@ ExecResult execute(CpuState& cpu, Bus& bus, const isa::DecodedInstr& instr,
     };
 
     const auto write_reg = [&](u32 value) {
+        if (instr.rd != 0) {
+            out.reg_written = instr.rd;
+            out.reg_old = cpu.x[instr.rd];  // captured before the write
+        }
         cpu.set_reg(instr.rd, value);
-        if (instr.rd != 0) out.reg_written = instr.rd;
     };
 
     const auto do_load = [&](u8 width, bool is_signed) {
@@ -37,10 +40,13 @@ ExecResult execute(CpuState& cpu, Bus& bus, const isa::DecodedInstr& instr,
 
     const auto do_store = [&](u8 width) {
         const Addr addr = rs1 + imm;
+        const Addr aligned = addr & ~3u;
+        const u32 before = bus.peek_word(aligned);
         const MemResult result = bus.store(addr, width, rs2);
         if (!result.ok) return raise(result.cause, addr);
-        out.mem_written = addr;
+        out.mem_written = aligned;
         out.mem_width = width;
+        out.mem_old = before;
     };
 
     const auto branch_if = [&](bool taken) {
@@ -57,7 +63,12 @@ ExecResult execute(CpuState& cpu, Bus& bus, const isa::DecodedInstr& instr,
             return raise(TrapCause::IllegalInstruction, instr.raw);
         }
         const u32 old = should_read ? cpu.csr.read(instr.csr) : 0;
-        if (should_write) cpu.csr.write(instr.csr, write_value);
+        if (should_write) {
+            out.wrote_csr = true;
+            out.csr_written = instr.csr;
+            out.csr_old = cpu.csr.read(instr.csr);
+            cpu.csr.write(instr.csr, write_value);
+        }
         if (should_read) write_reg(old);
     };
 
