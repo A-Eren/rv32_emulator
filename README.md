@@ -17,9 +17,9 @@ and step through what you wrote.
 |---|---|---|
 | M0 | Build skeleton, test harness | ✅ done |
 | M1 | Registers, memory, first instructions | ✅ done |
-| M2 | Full ISA, traps, CSRs, disassembler, `.mem` export | 🔨 in progress |
-| M3 | Assembler + source map | — |
-| M4 | CLI debugger | — |
+| M2 | Full ISA, traps, CSRs, disassembler, `.mem` export | ✅ done |
+| M3 | Assembler + source map | ✅ done |
+| M4 | CLI debugger | 🔨 next |
 | M5 | TUI shell | — |
 | M6 | Embedded editor | — |
 | M7 | Encoding panel, diff highlighting, reverse step | — |
@@ -42,17 +42,36 @@ Presets: `debug` (warnings as errors), `asan` (+ASan/UBSan), `release`.
 ## Trying it
 
 ```bash
-# Execute raw instruction words and watch the registers change
-./build/debug/rv32 exec 00500093 00300113 002081b3 00100073
+./build/debug/rv32 run examples/fib.s          # assemble and run
+./build/debug/rv32 asm examples/fib.s          # write imem.mem and dmem.mem
+./build/debug/rv32 asm examples/fib.s --annotate   # ... with disassembly comments
+./build/debug/rv32 run examples/fib.s --trace  # one line per instruction
+./build/debug/rv32 test tests/asm/*.s          # self-checking assembly tests
+```
+
+The error messages are the part worth looking at:
+
+```
+error[E0310]: 'call' needs a code address, but this is a data symbol
+  --> bad.s:9:17
+   |
+ 9 |         call    msg
+   |                 ^^^ lives in data memory
+ 2 | msg:    .asciz "hello"
+   | ^^^^ defined in .data here
+   |
+help: instruction memory and data memory are separate address spaces on this
+      machine; use 'la' to load a data address into a register
 ```
 
 ```
-addr      word      instruction              effect
--------------------------------------------------------------
-00000000  00500093  addi ra, zero, 5        ra = 0x00000005
-00000004  00300113  addi sp, zero, 3        sp = 0x00000003
-00000008  002081b3  add gp, ra, sp          gp = 0x00000008
-0000000c  00100073  ebreak
+error[E0201]: undefined symbol 'lop'
+  --> bad.s:8:25
+   |
+ 8 |         beq     a0, a1, lop
+   |                         ^^^ not defined in this file
+   |
+help: did you mean 'loop'? (defined at line 11)
 ```
 
 ## Architecture

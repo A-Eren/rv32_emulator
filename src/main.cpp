@@ -3,11 +3,18 @@
 // The command handling here is deliberately thin. From M4 the real command set
 // lives in rv_cmd, shared by the CLI and the TUI, and this file shrinks to
 // argument parsing and dispatch.
+#include <unistd.h>
+
 #include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <vector>
 
+#include <fstream>
+#include <sstream>
+
+#include "asm/assembler.hpp"
+#include "asm/diag_render.hpp"
 #include "core/hart.hpp"
 #include "core/memfile.hpp"
 #include "isa/disasm.hpp"
@@ -24,25 +31,38 @@ void print_usage() {
         "usage: rv32 <command> [options]\n"
         "\n"
         "commands:\n"
-        "  exec <word>...        execute raw instruction words given as hex\n"
-        "  run <imem.mem>        load a $readmemh image and run it\n"
+        "  asm <file.s>          assemble to .mem images\n"
+        "  run <file.s|.mem>     assemble if needed, then run\n"
         "  dis <imem.mem>        disassemble a $readmemh image\n"
+        "  exec <word>...        execute raw instruction words given as hex\n"
+        "  test <file.s>...      run self-checking assembly tests\n"
         "  --version, --help\n"
         "\n"
         "options:\n"
-        "  --dmem <file>         also load a data memory image (run)\n"
-        "  --trace               print each instruction as it executes (run)\n"
+        "  -o <file>             instruction image to write (default imem.mem)\n"
+        "  --dmem <file>         data image to write or load (default dmem.mem)\n"
+        "  --pad                 emit the full memory array, not just what is used\n"
+        "  --annotate            add disassembly comments to the .mem output\n"
+        "  --strict-word-mem     warn on sub-word loads and stores\n"
+        "  --trace               print each instruction as it executes\n"
         "  --limit <n>           stop after n instructions (default 1000000)\n"
         "  --numeric             print x10 rather than a0\n"
         "  --quiet               only print the final state\n");
 }
 
 struct Options {
+    std::string output_path;
     std::string dmem_path;
     u64 limit = 1'000'000;
     bool trace = false;
     bool quiet = false;
     bool numeric = false;
+    bool pad = false;
+    bool annotate = false;
+    bool strict_word_mem = false;
+    /// Emit the teaching notes (the 'la' sizing explanation). Useful while
+    /// learning, pure noise in a test runner.
+    bool explain = true;
     std::vector<std::string> positional;
 };
 
@@ -56,17 +76,25 @@ bool parse_options(const std::vector<std::string>& args, Options& out) {
             out.quiet = true;
         } else if (arg == "--numeric") {
             out.numeric = true;
-        } else if (arg == "--limit" || arg == "--dmem") {
+        } else if (arg == "--pad") {
+            out.pad = true;
+        } else if (arg == "--annotate") {
+            out.annotate = true;
+        } else if (arg == "--strict-word-mem") {
+            out.strict_word_mem = true;
+        } else if (arg == "--limit" || arg == "--dmem" || arg == "-o") {
             if (i + 1 >= args.size()) {
                 std::fprintf(stderr, "rv32: %s needs a value\n", arg.c_str());
                 return false;
             }
             if (arg == "--limit") {
                 out.limit = std::strtoull(args[++i].c_str(), nullptr, 0);
+            } else if (arg == "-o") {
+                out.output_path = args[++i];
             } else {
                 out.dmem_path = args[++i];
             }
-        } else if (arg.rfind("--", 0) == 0) {
+        } else if (arg.rfind("-", 0) == 0 && arg != "-") {
             std::fprintf(stderr, "rv32: unknown option '%s'\n", arg.c_str());
             return false;
         } else {
@@ -147,6 +175,144 @@ void run_machine(core::Hart& hart, const Options& options) {
     if (!uart.empty()) std::printf("\nuart output:\n%s\n", uart.c_str());
 }
 
+bool ends_with(const std::string& text, const std::string& suffix) {
+    return text.size() >= suffix.size() &&
+           text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+/// Assemble a file, printing diagnostics. Returns false if it did not assemble.
+bool assemble_file(const std::string& path, const Options& options, as::AssembledProgram& out) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) {
+        std::fprintf(stderr, "rv32: cannot open '%s'\n", path.c_str());
+        return false;
+    }
+    std::ostringstream contents;
+    contents << file.rdbuf();
+
+    const as::SourceFile source(path, contents.str());
+    as::AssembleOptions assemble_options;
+    assemble_options.strict_word_mem = options.strict_word_mem;
+    assemble_options.explain_pseudo_sizing = options.explain;
+    out = as::assemble(source, assemble_options);
+
+    if (!out.diagnostics.empty()) {
+        as::RenderOptions render_options;
+        // Colour only when stdout is a terminal, so redirecting to a file gives
+        // clean text.
+        render_options.color = isatty(fileno(stderr)) != 0;
+        std::fputs(as::render_all(out.diagnostics, source, render_options).c_str(), stderr);
+    }
+    return out.ok();
+}
+
+int command_asm(const std::vector<std::string>& args) {
+    Options options;
+    if (!parse_options(args, options)) return 2;
+    if (options.positional.size() != 1) {
+        std::fprintf(stderr, "rv32: asm needs exactly one source file\n");
+        return 2;
+    }
+
+    as::AssembledProgram program;
+    if (!assemble_file(options.positional[0], options, program)) return 1;
+
+    const std::string imem_path = options.output_path.empty() ? "imem.mem" : options.output_path;
+    const std::string dmem_path = options.dmem_path.empty() ? "dmem.mem" : options.dmem_path;
+
+    core::MemFileOptions mem_options;
+    mem_options.pad_to_full = options.pad;
+    mem_options.annotate = options.annotate;
+
+    mem_options.full_size = core::kDefaultImemSize / 4;
+    if (const core::MemFileResult result =
+            core::write_mem_file(imem_path, program.imem_words, mem_options);
+        !result.ok) {
+        std::fprintf(stderr, "rv32: %s\n", result.error.c_str());
+        return 1;
+    }
+
+    const std::vector<Word> dmem_words = core::pack_bytes_to_words(program.dmem_bytes);
+    mem_options.full_size = core::kDefaultDmemSize / 4;
+    mem_options.annotate = false;  // disassembling data would be nonsense
+    if (const core::MemFileResult result = core::write_mem_file(dmem_path, dmem_words, mem_options);
+        !result.ok) {
+        std::fprintf(stderr, "rv32: %s\n", result.error.c_str());
+        return 1;
+    }
+
+    if (!options.quiet) {
+        std::printf("%s: %zu instructions (%zu bytes)\n", imem_path.c_str(),
+                    program.imem_words.size(), program.imem_words.size() * 4);
+        std::printf("%s: %zu bytes of data\n", dmem_path.c_str(), program.dmem_bytes.size());
+    }
+    return 0;
+}
+
+/// Run self-checking assembly programs, riscv-tests style.
+///
+/// The convention: the program computes, leaves 0 in a0 on success or the
+/// number of the check that failed, and stops at ebreak. These are the highest
+/// value tests in the project -- one program exercises the assembler, the
+/// encoder, the decoder, the executor and the traps at once, and it is written
+/// in the language the tool exists for.
+int command_test(const std::vector<std::string>& args) {
+    Options options;
+    options.explain = false;
+    if (!parse_options(args, options)) return 2;
+    if (options.positional.empty()) {
+        std::fprintf(stderr, "rv32: test needs at least one .s file\n");
+        return 2;
+    }
+
+    int failures = 0;
+    for (const std::string& path : options.positional) {
+        as::AssembledProgram program;
+        if (!assemble_file(path, options, program)) {
+            std::printf("FAIL  %s (did not assemble)\n", path.c_str());
+            ++failures;
+            continue;
+        }
+
+        core::Hart hart;
+        hart.imem().load_words(program.imem_words);
+        hart.reset(program.entry);
+        hart.bus().dmem().load_bytes(program.dmem_bytes);
+
+        u64 executed = 0;
+        const u64 budget = options.limit;
+        while (!hart.halted() && executed < budget) {
+            hart.step();
+            ++executed;
+        }
+
+        if (!hart.halted()) {
+            std::printf("FAIL  %s (no ebreak after %llu instructions -- infinite loop?)\n",
+                        path.c_str(), static_cast<unsigned long long>(budget));
+            ++failures;
+            continue;
+        }
+        if (hart.halt_reason() != core::HaltReason::Ebreak) {
+            std::printf("FAIL  %s (%s at pc=0x%08x)\n", path.c_str(),
+                        core::halt_reason_name(hart.halt_reason()), hart.cpu().pc);
+            ++failures;
+            continue;
+        }
+
+        const u32 result = hart.cpu().x[10];  // a0
+        if (result != 0) {
+            std::printf("FAIL  %s (check #%u failed)\n", path.c_str(), result);
+            ++failures;
+            continue;
+        }
+        std::printf(" ok   %s (%llu instructions)\n", path.c_str(),
+                    static_cast<unsigned long long>(executed));
+    }
+
+    if (failures > 0) std::printf("\n%d of %zu failed\n", failures, options.positional.size());
+    return failures == 0 ? 0 : 1;
+}
+
 int command_exec(const std::vector<std::string>& args) {
     Options options;
     options.limit = 1000;
@@ -179,13 +345,28 @@ int command_run(const std::vector<std::string>& args) {
     Options options;
     if (!parse_options(args, options)) return 2;
     if (options.positional.size() != 1) {
-        std::fprintf(stderr, "rv32: run needs exactly one image file\n");
+        std::fprintf(stderr, "rv32: run needs exactly one file\n");
         return 2;
     }
 
+    const std::string& path = options.positional[0];
+
+    // Assembly source runs directly: there is no reason to make someone write
+    // the .mem file out first just to run their own program.
+    if (ends_with(path, ".s") || ends_with(path, ".S") || ends_with(path, ".asm")) {
+        as::AssembledProgram program;
+        if (!assemble_file(path, options, program)) return 1;
+
+        core::Hart hart;
+        hart.imem().load_words(program.imem_words);
+        hart.reset(program.entry);
+        hart.bus().dmem().load_bytes(program.dmem_bytes);
+        run_machine(hart, options);
+        return 0;
+    }
+
     std::vector<Word> imem_words;
-    if (const core::MemFileResult result = core::read_mem_file(options.positional[0], imem_words);
-        !result.ok) {
+    if (const core::MemFileResult result = core::read_mem_file(path, imem_words); !result.ok) {
         std::fprintf(stderr, "rv32: %s\n", result.error.c_str());
         return 1;
     }
@@ -249,6 +430,8 @@ int main(int argc, char** argv) {
     }
 
     const std::vector<std::string> rest(args.begin() + 1, args.end());
+    if (args[0] == "asm") return command_asm(rest);
+    if (args[0] == "test") return command_test(rest);
     if (args[0] == "exec") return command_exec(rest);
     if (args[0] == "run") return command_run(rest);
     if (args[0] == "dis") return command_dis(rest);

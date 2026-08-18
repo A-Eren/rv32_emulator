@@ -53,6 +53,11 @@ add_library(rv_asm STATIC
     src/asm/diag_render.cpp
     src/asm/directive.cpp
     src/asm/lexer.cpp
+    src/asm/symtab.cpp
+    src/asm/pseudo.cpp
+    src/asm/parser.cpp
+    src/asm/sourcemap.cpp
+    src/asm/assembler.cpp
 )
 target_link_libraries(rv_asm PUBLIC rv_core)
 rv_set_warnings(rv_asm)
@@ -82,6 +87,7 @@ add_executable(rv_tests
     tests/unit_memfile.cpp
     tests/unit_lexer.cpp
     tests/unit_diag_render.cpp
+    tests/unit_assembler.cpp
 )
 target_link_libraries(rv_tests PRIVATE rv_asm)
 target_include_directories(rv_tests PRIVATE tests)
@@ -89,6 +95,14 @@ rv_set_warnings(rv_tests)
 
 # One CTest entry per suite, so a failure can be re-run in isolation.
 foreach(suite fields decode roundtrip exec_alu exec_mem exec_branch exec_m csr_trap memfile
-              lexer diag_render)
+              lexer diag_render assembler)
     add_test(NAME unit.${suite} COMMAND rv_tests --filter=${suite})
+endforeach()
+
+# Self-checking assembly programs: one CTest each, so a failure names the file.
+# Globbed at configure time, so re-run cmake after adding one.
+file(GLOB RV32_ASM_TESTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/asm/*.s)
+foreach(asm_test ${RV32_ASM_TESTS})
+    get_filename_component(asm_name ${asm_test} NAME_WE)
+    add_test(NAME asm.${asm_name} COMMAND rv32 test ${asm_test})
 endforeach()
