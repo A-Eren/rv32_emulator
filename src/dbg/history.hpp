@@ -34,8 +34,7 @@ struct StepDelta {
 
     u64 cycle_before = 0;
     u64 instret_before = 0;
-    u32 uart_length_before = 0;
-    u32 leds_before = 0;
+    core::DeviceState devices_before;
 
     /// Index into the side table of full CSR snapshots, or kNoSnapshot. Traps
     /// and mret change several CSRs at once; rather than widening this record

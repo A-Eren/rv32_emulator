@@ -40,6 +40,11 @@ public:
     /// csrr of `cycle` observes the cycle it is executing in.
     void set_counters(u64 cycle, u64 instret);
 
+    /// Publish the interrupt lines the devices are asserting. mip is read-only
+    /// to software and computed from device state, so it is pushed in here
+    /// rather than being written by a csrrw.
+    void set_pending_interrupts(u32 mip);
+
     // Index-based access for the reverse-step delta, which stores a table
     // index rather than an address.
     u32 by_index(std::size_t index) const { return values_[index]; }

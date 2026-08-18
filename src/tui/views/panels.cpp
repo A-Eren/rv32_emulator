@@ -119,13 +119,38 @@ void MmioView::draw(Pane pane) {
 
     line("leds", 0xffff0010u, bus.leds().value(), "output register");
     line("switches", 0xffff0020u, bus.switches().value(), "input register");
-    line("cycles", 0xffff0030u, static_cast<u32>(session_->cpu().cycle), "mirrors the counter");
+    line("mtime", 0xffff0030u, static_cast<u32>(session_->cpu().cycle), "the cycle counter");
+
+    const u32 compare = bus.timer().compare();
+    line("mtimecmp", 0xffff0040u, compare,
+         bus.timer().armed() ? "timer fires at this cycle" : "disarmed");
 
     if (row < pane.height()) {
-        char text[128];
+        char text[160];
         std::snprintf(text, sizeof text, "uart       0xffff0000  %8zu  bytes written",
                       session_->uart_output().size());
         pane.put(0, row++, text, StyleId::Dim);
+    }
+
+    // Interrupt state, which is the thing you actually want while debugging a
+    // handler: which lines are asserted, which are unmasked, and whether they
+    // can be taken at all.
+    if (row < pane.height()) {
+        const u32 pending = bus.pending_interrupts(session_->cpu().cycle);
+        const u32 enabled = session_->cpu().csr.read(0x304);
+        const bool global = rv::bit(session_->cpu().csr.read(0x300), 3) != 0;
+
+        const auto flag = [](u32 mask, u32 bits) { return (bits & mask) != 0 ? '1' : '.'; };
+        char text[160];
+        std::snprintf(text, sizeof text,
+                      "irq  pending ext=%c sw=%c timer=%c   mie ext=%c sw=%c timer=%c   %s",
+                      flag(core::kIrqExternal, pending), flag(core::kIrqSoftware, pending),
+                      flag(core::kIrqTimer, pending), flag(core::kIrqExternal, enabled),
+                      flag(core::kIrqSoftware, enabled), flag(core::kIrqTimer, enabled),
+                      global ? "MIE on" : "MIE off");
+        // Highlight only when an interrupt could actually be taken right now.
+        const bool armed = global && (pending & enabled & core::kIrqAll) != 0;
+        pane.put(0, row++, text, armed ? StyleId::ChangedValue : StyleId::Dim);
     }
 
     // A little binary strip, because the point of an LED register is to be

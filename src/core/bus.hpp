@@ -27,6 +27,20 @@ public:
     SwitchDevice& switches() { return switches_; }
     const SwitchDevice& switches() const { return switches_; }
     CycleDevice& cycles() { return cycles_; }
+    TimerDevice& timer() { return timer_; }
+    const TimerDevice& timer() const { return timer_; }
+    IrqDevice& irq() { return irq_; }
+    const IrqDevice& irq() const { return irq_; }
+
+    /// The mip value the devices are asserting right now. Computed rather than
+    /// stored, because the timer bit is a pure function of the cycle counter --
+    /// which is what makes interrupts reproducible under reverse stepping.
+    u32 pending_interrupts(u64 now) const;
+
+    /// Capture and restore everything a step can change in a device, for the
+    /// reverse-step delta.
+    DeviceState capture() const;
+    void restore(const DeviceState& state);
 
     static bool is_mmio(Addr addr) { return addr >= kMmioBase && addr - kMmioBase < kMmioSize; }
 
@@ -49,6 +63,8 @@ private:
     LedDevice leds_;
     SwitchDevice switches_;
     CycleDevice cycles_;
+    TimerDevice timer_;
+    IrqDevice irq_;
     std::array<Device*, kMmioSlots> slots_{};
 };
 

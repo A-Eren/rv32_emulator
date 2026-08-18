@@ -34,11 +34,31 @@ Sixteen slots of sixteen bytes at `0xFFFF0000`–`0xFFFF00FF`, dispatched by
 | `0xFFFF0004` | R | UART status; bit 0 = transmitter ready (always 1) |
 | `0xFFFF0010` | RW | LED output register, 32 bits |
 | `0xFFFF0020` | R | Switch input register, 32 bits (writes ignored) |
-| `0xFFFF0030` | R | Cycle counter, low word |
+| `0xFFFF0030` | R | Cycle counter, low word — this is also `mtime` |
 | `0xFFFF0034` | R | Cycle counter, high word |
+| `0xFFFF0040` | RW | `mtimecmp`: a timer interrupt is pending while `mtime >= mtimecmp`. Resets disarmed (`0xFFFFFFFF`) |
+| `0xFFFF0050` | RW | Software interrupt request, bit 0 |
+| `0xFFFF0054` | RW | External interrupt request, bit 0 |
 
 Switch inputs survive a reset, since physical switches on a board do not move
 when the core is reset.
+
+### Time is the cycle counter
+
+There is no wall clock. `mtime` is the retired-cycle count, which is the choice
+that makes everything else work: the same program takes the same interrupt on
+the same cycle every run, so the self-checking test programs stay meaningful and
+reverse stepping is exact rather than approximate.
+
+`mtimecmp` is 32 bits here, where a real machine has a 64-bit one that must be
+written high half first to avoid firing spuriously in between. That hazard is
+worth knowing about; it is not worth inflicting on someone learning assembly,
+and no program on a 4096-instruction machine reaches four billion cycles.
+
+`wfi` follows from the same choice. Rather than spinning, it advances the cycle
+counter to the armed timer's deadline — the machine has nothing else to do, and
+burning instructions would make the cycle count meaningless. With nothing armed
+and nothing pending, it halts and says so instead of waiting forever.
 
 ## Alignment
 

@@ -1,6 +1,8 @@
 // The machine: one hart, its instruction memory, and its data bus.
 #pragma once
 
+#include <optional>
+
 #include "core/bus.hpp"
 #include "core/cpustate.hpp"
 #include "core/exec.hpp"
@@ -25,6 +27,11 @@ struct StepOutcome {
     TrapCause cause = TrapCause::None;
     u32 tval = 0;
 
+    /// Set when the step was pre-empted by an interrupt rather than executing
+    /// the instruction at pc_before. `interrupt` says which line fired.
+    bool interrupted = false;
+    InterruptCause interrupt = InterruptCause::MachineTimer;
+
     HaltReason halt = HaltReason::None;
 
     // What changed, and what was there before -- see ExecResult for why this
@@ -40,19 +47,22 @@ struct StepOutcome {
     u8 mem_width = 0;
     u32 mem_old = 0;
 
-    /// Set when the step entered a trap handler or returned from one. Those
-    /// touch several CSRs at once, which does not fit the single-CSR record;
-    /// the history takes a whole CsrFile copy instead. Traps are rare enough
-    /// that widening the common case to accommodate them would be the wrong
+    /// Set when the step entered a trap or interrupt handler, or returned from
+    /// one. Those touch several CSRs at once, which does not fit the
+    /// single-CSR record; the history keeps `csr_before` instead. Traps are
+    /// rare enough that widening the common case for them would be the wrong
     /// trade.
     bool touched_many_csrs = false;
+    /// The CSR file as it was *before* the step. Captured unconditionally
+    /// because whether the step would touch several CSRs is not known until
+    /// afterwards -- and reconstructing it from the post-step state is exactly
+    /// the bug this field exists to prevent.
+    CsrFile csr_before;
 
     u64 cycle_before = 0;
     u64 instret_before = 0;
-    /// UART output length before the step, so undo can drop bytes that a
-    /// buffered console has not really sent anywhere.
-    std::size_t uart_length_before = 0;
-    u32 leds_before = 0;
+    /// Device state before the step, so undo can put it back.
+    DeviceState devices_before;
 };
 
 class Hart {
@@ -88,6 +98,15 @@ private:
     /// program from the top is the single most confusing failure mode for a
     /// beginner.
     void take_trap(TrapCause cause, u32 tval, Addr epc, StepOutcome& out);
+
+    /// Transfer to the handler for a pending interrupt. Unlike an exception,
+    /// mepc points at the instruction that has *not* run yet, so mret resumes
+    /// it rather than skipping it.
+    void take_interrupt(InterruptCause cause, StepOutcome& out);
+
+    /// The highest-priority enabled interrupt that is pending, if any. Order is
+    /// fixed by the spec: external, then software, then timer.
+    std::optional<InterruptCause> pending_interrupt() const;
 
     CpuState cpu_;
     Memory imem_;

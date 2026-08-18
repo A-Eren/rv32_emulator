@@ -1,7 +1,7 @@
 # rv32
 
 An RV32IM_Zicsr emulator, assembler and debugger built for **learning and
-teaching assembly**. Not a fast emulator — a visible one. Every design decision
+teaching assembly**, with machine-mode interrupts. Not a fast emulator — a visible one. Every design decision
 serves three questions:
 
 1. **What exactly changed in this step?** — register and memory diff highlighting
@@ -57,6 +57,7 @@ Presets: `debug` (warnings as errors), `asan` (+ASan/UBSan), `release`.
 ./build/debug/rv32 asm examples/fib.s          # write imem.mem and dmem.mem
 ./build/debug/rv32 asm examples/fib.s --annotate   # ... with disassembly comments
 ./build/debug/rv32 run examples/fib.s --trace  # one line per instruction
+./build/debug/rv32 run examples/timer.s        # a timer interrupt, from scratch
 ./build/debug/rv32 test tests/asm/*.s          # self-checking assembly tests
 ./build/debug/rv32 dbg examples/fib.s          # interactive debugger
 ./build/debug/rv32 tui examples/fib.s          # full-screen debugger

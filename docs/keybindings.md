@@ -39,7 +39,7 @@ program explains it as you go.
 | `2` | Mem | Data memory; follows a store rather than making you hunt for it |
 | `3` | Encode | The instruction as labelled bitfields, and what it did |
 | `4` | Out | Whatever the program sent to the UART |
-| `5` | I/O | LEDs, switches and the cycle counter as state |
+| `5` | I/O | LEDs, switches, `mtime`/`mtimecmp`, and which interrupt lines are pending, unmasked and takeable |
 | `6` | Sym | Every symbol with the **space** it lives in — the thing that explains why `call msg` was rejected |
 
 ## Editing

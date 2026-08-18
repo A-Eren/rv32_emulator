@@ -4,7 +4,7 @@ namespace rv::dbg {
 
 StepHistory::StepHistory(std::size_t capacity) : deltas_(capacity) {}
 
-void StepHistory::record(const core::StepOutcome& outcome, const core::Hart& hart) {
+void StepHistory::record(const core::StepOutcome& outcome, const core::Hart& /*hart*/) {
     StepDelta delta;
     delta.pc_before = outcome.pc_before;
     delta.raw = outcome.raw;
@@ -18,14 +18,14 @@ void StepHistory::record(const core::StepOutcome& outcome, const core::Hart& har
     delta.mem_width = outcome.mem_width;
     delta.cycle_before = outcome.cycle_before;
     delta.instret_before = outcome.instret_before;
-    delta.uart_length_before = static_cast<u32>(outcome.uart_length_before);
-    delta.leds_before = outcome.leds_before;
+    delta.devices_before = outcome.devices_before;
 
     if (outcome.touched_many_csrs) {
-        // The snapshot table only ever grows during a run and is cleared on
-        // reset. Traps are rare, so this stays small in practice.
+        // The pre-step copy, not the current one: the whole point is to undo
+        // what the trap wrote. The table only grows during a run and is cleared
+        // on reset, and traps are rare, so it stays small in practice.
         delta.csr_snapshot = static_cast<u32>(csr_snapshots_.size());
-        csr_snapshots_.push_back(hart.cpu().csr);
+        csr_snapshots_.push_back(outcome.csr_before);
     }
 
     deltas_[next_] = delta;
@@ -57,8 +57,7 @@ bool StepHistory::undo(core::Hart& hart) {
         hart.bus().poke_word(delta.mem_addr, delta.mem_before);
     }
 
-    hart.bus().uart().truncate(delta.uart_length_before);
-    hart.bus().leds().set_raw(delta.leds_before);
+    hart.bus().restore(delta.devices_before);
     cpu.cycle = delta.cycle_before;
     cpu.instret = delta.instret_before;
     hart.bus().cycles().set_cycles(cpu.cycle);

@@ -6,7 +6,9 @@ namespace rv::core {
 namespace {
 
 constexpr CsrAddr kMstatus = 0x300;
+constexpr CsrAddr kMie = 0x304;
 constexpr CsrAddr kMtvec = 0x305;
+constexpr CsrAddr kMip = 0x344;
 constexpr CsrAddr kMepc = 0x341;
 constexpr CsrAddr kMcause = 0x342;
 constexpr CsrAddr kMtval = 0x343;
@@ -51,14 +53,56 @@ void Hart::take_trap(TrapCause cause, u32 tval, Addr epc, StepOutcome& out) {
     out.pc_after = cpu_.pc;
 }
 
+std::optional<InterruptCause> Hart::pending_interrupt() const {
+    const u32 mstatus = cpu_.csr.read(kMstatus);
+    if (bit(mstatus, 3) == 0) return std::nullopt;  // MIE clear: globally masked
+
+    const u32 active = cpu_.csr.read(kMie) & cpu_.csr.read(kMip) & kIrqAll;
+    if (active == 0) return std::nullopt;
+
+    // Priority is fixed by the spec.
+    if ((active & kIrqExternal) != 0) return InterruptCause::MachineExternal;
+    if ((active & kIrqSoftware) != 0) return InterruptCause::MachineSoftware;
+    return InterruptCause::MachineTimer;
+}
+
+void Hart::take_interrupt(InterruptCause cause, StepOutcome& out) {
+    out.interrupted = true;
+    out.interrupt = cause;
+    out.touched_many_csrs = true;
+
+    const u32 mtvec = cpu_.csr.read(kMtvec);
+    if (mtvec == 0) {
+        // Enabling an interrupt without installing a handler is a mistake
+        // worth naming, not a jump to address zero.
+        halt_reason_ = HaltReason::UnhandledTrap;
+        out.halt = halt_reason_;
+        out.trapped = true;
+        return;
+    }
+
+    cpu_.csr.raw_write(kMepc, cpu_.pc);
+    cpu_.csr.raw_write(kMcause, kMcauseInterrupt | static_cast<u32>(cause));
+    cpu_.csr.raw_write(kMtval, 0);
+
+    const u32 mstatus = cpu_.csr.read(kMstatus);
+    u32 next = mstatus & ~0x1888u;
+    next |= bit(mstatus, 3) << 7;  // MPIE <- MIE
+    next |= 3u << 11;              // MPP  <- machine mode
+    cpu_.csr.raw_write(kMstatus, next);
+
+    cpu_.pc = mtvec & ~3u;  // direct mode
+    out.pc_after = cpu_.pc;
+}
+
 StepOutcome Hart::step() {
     StepOutcome out;
     out.pc_before = cpu_.pc;
     out.pc_after = cpu_.pc;
     out.cycle_before = cpu_.cycle;
     out.instret_before = cpu_.instret;
-    out.uart_length_before = bus_.uart().output().size();
-    out.leds_before = bus_.leds().value();
+    out.devices_before = bus_.capture();
+    out.csr_before = cpu_.csr;
 
     if (halted()) {
         out.halt = halt_reason_;
@@ -66,8 +110,21 @@ StepOutcome Hart::step() {
     }
 
     // Make the counter CSRs observable at their current values before the
-    // instruction runs, so `csrr t0, cycle` sees the cycle it is executing in.
+    // instruction runs, so `csrr t0, cycle` sees the cycle it is executing in,
+    // and publish whatever the devices are asserting on mip.
     cpu_.csr.set_counters(cpu_.cycle, cpu_.instret);
+    cpu_.csr.set_pending_interrupts(bus_.pending_interrupts(cpu_.cycle));
+
+    // Interrupts are checked before the fetch, so the instruction at pc has
+    // not run yet and mepc points at it -- mret resumes it rather than
+    // skipping it. That is the difference from an exception, and it is why
+    // handlers do not adjust mepc the way an ecall handler must.
+    if (const auto interrupt = pending_interrupt()) {
+        take_interrupt(*interrupt, out);
+        ++cpu_.cycle;
+        bus_.cycles().set_cycles(cpu_.cycle);
+        return out;
+    }
 
     // ---- fetch (from IMEM, never from the data bus) ----
     if ((cpu_.pc & 3u) != 0) {
@@ -102,7 +159,8 @@ StepOutcome Hart::step() {
     // full-snapshot treatment as trap entry.
     if (out.instr.id == isa::InstrId::MRET) out.touched_many_csrs = true;
 
-    ++cpu_.cycle;
+    // wfi asks to skip ahead to the next timer event.
+    cpu_.cycle += 1 + result.advance_cycles;
     bus_.cycles().set_cycles(cpu_.cycle);
 
     if (result.trapped) {

@@ -255,9 +255,27 @@ ExecResult execute(CpuState& cpu, Bus& bus, const isa::DecodedInstr& instr,
             out.next_pc = cpu.csr.read(0x341);
             break;
         }
-        case InstrId::WFI:
-            // No interrupts to wait for; retire as a no-op rather than hanging.
+        case InstrId::WFI: {
+            // Time is the cycle counter, so waiting means jumping forward to
+            // the next event rather than burning instructions in a spin loop --
+            // which also keeps the whole thing deterministic and reversible.
+            //
+            // wfi wakes on a pending interrupt regardless of mstatus.MIE, so
+            // only mie is consulted here.
+            const u32 armed = cpu.csr.read(0x304) & kIrqAll;
+            const u32 pending = bus.pending_interrupts(cpu.cycle) & armed;
+            if (pending != 0) break;  // already awake: retire immediately
+
+            const bool timer_armed = (armed & kIrqTimer) != 0 && bus.timer().armed();
+            if (!timer_armed) {
+                // No timer to fire and nothing pending. Nothing can ever wake
+                // the hart, so say so rather than looping forever.
+                out.halt = HaltReason::WaitingForever;
+                break;
+            }
+            out.advance_cycles = bus.timer().compare() - cpu.cycle;
             break;
+        }
 
         case InstrId::Count:
             raise(TrapCause::IllegalInstruction, instr.raw);

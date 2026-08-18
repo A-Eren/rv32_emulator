@@ -23,6 +23,10 @@ void CsrFile::raw_write(CsrAddr addr, u32 value) {
     if (index != kCsrCount) values_[index] = value;
 }
 
+void CsrFile::set_pending_interrupts(u32 mip) {
+    values_[static_cast<std::size_t>(CsrId::MIP)] = mip;
+}
+
 void CsrFile::set_counters(u64 cycle, u64 instret) {
     values_[static_cast<std::size_t>(CsrId::CYCLE)] = static_cast<u32>(cycle);
     values_[static_cast<std::size_t>(CsrId::CYCLEH)] = static_cast<u32>(cycle >> 32);

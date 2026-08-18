@@ -22,6 +22,10 @@ struct ExecResult {
 
     HaltReason halt = HaltReason::None;
 
+    /// Cycles to skip past, for wfi. Time here is the cycle counter, so
+    /// "waiting" means advancing it to the next event rather than spinning.
+    u64 advance_cycles = 0;
+
     // What this instruction touched, and what was there before.
     //
     // RV32 has a property that makes this cheap: an instruction writes at most
