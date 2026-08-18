@@ -13,8 +13,8 @@
 
 namespace rv::gui {
 
-/// Semantic roles, mirroring tui::StyleId so the two front-ends stay
-/// recognisably the same tool.
+/// Semantic roles. A view names a role, never a colour, so the palette is
+/// one place and the highlighter says nothing about how things look.
 enum class Role : int {
     Normal,
     Mnemonic,

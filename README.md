@@ -11,19 +11,7 @@ serves three questions:
 3. **Why did it not assemble?** — line, column, caret, and a suggested fix
 
 The centrepiece is an embedded editor: write assembly, press F5, and step
-through what you wrote. There are two front-ends — a desktop window and a
-terminal one — over the same engine.
-
-```
-  EDIT  fib.s*   Ln 3, Col 5  1 error
- ▶ 1│_start:
-   2│    li   a0, 5
-E  3│    addii a1, a0, 3
-   4│    ebreak
-
-unknown instruction 'addii'
-F5 assemble+debug  ^S save  ^Z undo  F9 bp  F4 next error  ? help  ^Q quit
-```
+through what you wrote.
 
 ## Status
 
@@ -34,18 +22,18 @@ F5 assemble+debug  ^S save  ^Z undo  F9 bp  F4 next error  ? help  ^Q quit
 | M2 | Full ISA, traps, CSRs, disassembler, `.mem` export | ✅ done |
 | M3 | Assembler + source map | ✅ done |
 | M4 | CLI debugger | ✅ done |
-| M5 | TUI shell | ✅ done |
+| M5 | Front-end shell | ✅ done |
 | M6 | Embedded editor | ✅ done |
 | M7 | Encoding panel, diff highlighting, reverse step | ✅ done |
 | M8 | Polish, examples, docs | ✅ done |
 
 ## Building
 
-Requires a C++17 compiler, CMake 3.20+, Ninja and `ncursesw`. Qt6 is optional:
-without it everything still builds, minus the desktop window.
+Requires a C++17 compiler, CMake 3.20+ and Ninja. Qt6 is optional: without it
+everything still builds, minus the desktop window.
 
 ```bash
-sudo apt install ninja-build libncursesw5-dev qt6-base-dev
+sudo apt install ninja-build qt6-base-dev
 ```
 
 No other dependencies: the test harness is 150 lines in `tests/rv_test.hpp`, and
@@ -69,9 +57,7 @@ Presets: `debug` (warnings as errors), `asan` (+ASan/UBSan), `release`.
 ./build/debug/rv32 run examples/timer.s        # a timer interrupt, from scratch
 ./build/debug/rv32 test tests/asm/*.s          # self-checking assembly tests
 ./build/debug/rv32 dbg examples/fib.s          # interactive debugger
-./build/debug/rv32-gui examples/fib.s          # desktop window (needs Qt6)
-./build/debug/rv32 tui examples/fib.s          # full-screen terminal debugger
-./build/debug/rv32 tui examples/fib.s --edit   # ... starting in the editor
+./build/debug/rv32-gui examples/fib.s          # the desktop window
 ```
 
 The debugger steps by source line by default, so a `li` that expands to two
@@ -125,20 +111,18 @@ help: did you mean 'loop'? (defined at line 11)
 
 ## Architecture
 
-The rule that shapes everything: **ncurses appears in exactly one library and
-two translation units.** Beyond testability, `<curses.h>` `#define`s ordinary
-words — including `instr`, `move`, `clear`, `line` and `timeout` — so letting it
-leak into a codebase full of `DecodedInstr` would produce unreadable errors.
+The rule that shapes everything: **nothing below `rv_cmd` knows a user
+interface exists.** The engine is a library, the window is a shell over it, and
+the command-line debugger is a second shell over the same one.
 
 ```
 rv_isa    instruction table, encode, decode, disassemble    (no dependencies)
  ├── rv_core   registers, memory, MMIO, execute, traps, interrupts
  └── rv_asm    lexer, parser, assembler
        └── rv_dbg    breakpoints, stepping, reverse step
-             └── rv_cmd    command registry + REPL, no ncurses, no Qt
-                   ├── rv_tui     the terminal interface
+             └── rv_cmd    command registry + REPL, no Qt
                    ├── rv32-gui   the desktop window
-                   └── rv32       the binary
+                   └── rv32       the command-line tools
 ```
 
 Both front-ends are shells over `DebugSession` and `rv_cmd`. Neither implements
@@ -146,8 +130,8 @@ stepping, breakpoints or highlighting of its own, which is why they cannot
 disagree about what any of those mean.
 
 `rv_cmd` sitting *below* both front-ends is deliberate: `break`, `step` and
-`x/16xw` are implemented once, and the TUI's `:` prompt runs the same code the
-CLI does.
+`x/16xw` are implemented once, and the window reaches the same registry the
+command line does.
 
 ### The ISA is described once
 
@@ -189,9 +173,9 @@ With no reference toolchain available, correctness comes from three sources:
 - **Self-checking `.s` programs** — riscv-tests style, written in the language
   the tool is *for*. One of them exercises the assembler, encoder, decoder,
   executor and traps in a single run.
-- **Headless rendering** — every TUI panel draws into an in-memory canvas, so
-  the interface is tested by pressing keys and looking at the resulting frame.
-  That is the same path `--render-once` takes, so the tests cover the real code
+- **Offscreen GUI tests** — the window is created for real on Qt's offscreen
+  platform, driven through the actions the toolbar calls, then asked what it
+  shows. No display needed, so it runs in CI, and it exercises the real path
   rather than a parallel one.
 
 ## License

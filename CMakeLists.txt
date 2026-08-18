@@ -76,7 +76,9 @@ rv_set_warnings(rv_dbg)
 
 # ---------------------------------------------------------------------------
 # rv_cmd -- the command set and the line-based REPL, shared by both front-ends.
-# Must not depend on ncurses: the TUI's ':' prompt runs exactly this code.
+# Must not depend on any UI toolkit: the window and the command line both
+# reach this same registry, so neither can grow its own idea of what `step`
+# means.
 # ---------------------------------------------------------------------------
 add_library(rv_cmd STATIC
     src/cmd/format.cpp
@@ -85,38 +87,6 @@ add_library(rv_cmd STATIC
 )
 target_link_libraries(rv_cmd PUBLIC rv_dbg)
 rv_set_warnings(rv_cmd)
-
-# ---------------------------------------------------------------------------
-# rv_tui -- the terminal interface.
-#
-# ncursesw appears in exactly one target and, inside it, in exactly two
-# translation units (term.cpp and curses_canvas.cpp). Everything else draws
-# through the Canvas abstraction. That is not purity theatre: <curses.h>
-# #defines `instr`, `move`, `clear`, `line` and `timeout`, and this codebase is
-# built around DecodedInstr.
-# ---------------------------------------------------------------------------
-find_package(Curses REQUIRED)
-
-add_library(rv_tui STATIC
-    src/tui/theme.cpp
-    src/tui/string_canvas.cpp
-    src/tui/key.cpp
-    src/tui/curses_canvas.cpp
-    src/tui/term.cpp
-    src/tui/layout.cpp
-    src/tui/highlight.cpp
-    src/tui/views/regs_view.cpp
-    src/tui/views/source_view.cpp
-    src/tui/views/encoding_view.cpp
-    src/tui/views/panels.cpp
-    src/tui/editor/text_buffer.cpp
-    src/tui/editor/undo.cpp
-    src/tui/editor/editor_view.cpp
-    src/tui/app.cpp
-)
-target_link_libraries(rv_tui PUBLIC rv_cmd PRIVATE ${CURSES_LIBRARIES})
-target_include_directories(rv_tui PRIVATE ${CURSES_INCLUDE_DIRS})
-rv_set_warnings(rv_tui)
 
 # ---------------------------------------------------------------------------
 # rv_gui -- the desktop interface.
@@ -164,7 +134,7 @@ endif()
 # rv32 -- the front-end binary.
 # ---------------------------------------------------------------------------
 add_executable(rv32 src/main.cpp)
-target_link_libraries(rv32 PRIVATE rv_tui)
+target_link_libraries(rv32 PRIVATE rv_cmd)
 rv_set_warnings(rv32)
 
 # ---------------------------------------------------------------------------
@@ -189,17 +159,14 @@ add_executable(rv_tests
     tests/unit_diag_render.cpp
     tests/unit_assembler.cpp
     tests/unit_session.cpp
-    tests/unit_render.cpp
-    tests/unit_app.cpp
-    tests/unit_editor.cpp
 )
-target_link_libraries(rv_tests PRIVATE rv_tui)
+target_link_libraries(rv_tests PRIVATE rv_cmd)
 target_include_directories(rv_tests PRIVATE tests)
 rv_set_warnings(rv_tests)
 
 # One CTest entry per suite, so a failure can be re-run in isolation.
 foreach(suite fields decode roundtrip exec_alu exec_mem exec_branch exec_m exec_coverage csr_trap interrupt memfile
-              lexer diag_render assembler session render app editor)
+              lexer diag_render assembler session)
     add_test(NAME unit.${suite} COMMAND rv_tests --filter=${suite})
 endforeach()
 

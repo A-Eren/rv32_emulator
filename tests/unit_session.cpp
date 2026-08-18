@@ -408,7 +408,8 @@ RV_TEST(session, reset_keeps_breakpoints_and_reloads_data) {
 
 namespace {
 
-/// Run a command and capture everything it printed.
+/// Run a command and capture everything it printed. The GUI reaches the same
+/// registry through its ':'-equivalent paths, so this covers both.
 std::string run_command(DebugSession& session, const std::string& line) {
     std::string output;
     cmd::CmdContext context{session, [&output](const std::string& text) { output += text; }, {},
@@ -420,7 +421,7 @@ std::string run_command(DebugSession& session, const std::string& line) {
 
 }  // namespace
 
-RV_TEST(session, commands_drive_the_same_engine_the_tui_will) {
+RV_TEST(session, commands_drive_the_same_engine_the_gui_does) {
     DebugSession session = make_session(
         "        li a0, 1\n"
         "        li a1, 2\n"

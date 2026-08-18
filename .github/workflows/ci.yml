@@ -24,7 +24,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build libncursesw5-dev qt6-base-dev
+          sudo apt-get install -y ninja-build qt6-base-dev
 
       - name: Configure
         env:
@@ -55,12 +55,9 @@ jobs:
           # Every line must be exactly eight lowercase hex digits.
           grep -qvE '^[0-9a-f]{8}$' /tmp/imem.mem && exit 1 || true
 
-      - name: Render one TUI frame headlessly
-        run: ./build/${{ matrix.preset }}/rv32 tui examples/fib.s --render-once
-
-      # The GUI is exercised the same way: created for real on Qt's offscreen
-      # platform, driven through the actions the toolbar calls, then asked what
-      # it shows. No display needed.
+      # The GUI is created for real on Qt's offscreen platform, driven through
+      # the actions the toolbar calls, then asked what it shows. No display
+      # needed, so it runs here.
       - name: Render one GUI frame headlessly
         env:
           QT_QPA_PLATFORM: offscreen
