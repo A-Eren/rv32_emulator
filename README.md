@@ -11,6 +11,17 @@ serves three questions:
 The centrepiece is an embedded editor: write assembly in the app, press F5,
 and step through what you wrote.
 
+```
+  EDIT  fib.s*   Ln 3, Col 5  1 error
+ ▶ 1│_start:
+   2│    li   a0, 5
+E  3│    addii a1, a0, 3
+   4│    ebreak
+
+unknown instruction 'addii'
+F5 assemble+debug  ^S save  ^Z undo  F9 bp  F4 next error  ? help  ^Q quit
+```
+
 ## Status
 
 | Milestone | Scope | State |
@@ -23,7 +34,7 @@ and step through what you wrote.
 | M5 | TUI shell | ✅ done |
 | M6 | Embedded editor | ✅ done |
 | M7 | Encoding panel, diff highlighting, reverse step | ✅ done |
-| M8 | Polish, examples, docs | 🔨 next |
+| M8 | Polish, examples, docs | ✅ done |
 
 ## Building
 
@@ -95,6 +106,12 @@ error[E0201]: undefined symbol 'lop'
 help: did you mean 'loop'? (defined at line 11)
 ```
 
+## Documentation
+
+- [`docs/keybindings.md`](docs/keybindings.md) — every key, and what the panels show
+- [`docs/memory-map.md`](docs/memory-map.md) — the two address spaces, MMIO, and the `.mem` format
+- [`docs/isa-support.md`](docs/isa-support.md) — what is implemented, what is not, and why
+
 ## Architecture
 
 The rule that shapes everything: **ncurses appears in exactly one library and
@@ -153,5 +170,10 @@ With no reference toolchain available, correctness comes from three sources:
 - **A semantic checklist** — each test cites the spec rule it enforces
   (`jalr` clearing the low bit, `div` by zero yielding −1, `srai` sign
   behaviour, shift amounts masked to 5 bits).
-- **Self-checking `.s` programs** (from M3) — riscv-tests style, written in the
-  language the tool is *for*.
+- **Self-checking `.s` programs** — riscv-tests style, written in the language
+  the tool is *for*. One of them exercises the assembler, encoder, decoder,
+  executor and traps in a single run.
+- **Headless rendering** — every TUI panel draws into an in-memory canvas, so
+  the interface is tested by pressing keys and looking at the resulting frame.
+  That is the same path `--render-once` takes, so the tests cover the real code
+  rather than a parallel one.

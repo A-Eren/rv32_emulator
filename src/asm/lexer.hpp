@@ -34,6 +34,7 @@ public:
     std::vector<Token> tokenize();
 
 private:
+    Token scan();
     Token make(TokenKind kind, std::size_t start);
     void skip_whitespace();
     Token lex_word(std::size_t start);
@@ -49,6 +50,11 @@ private:
     LexMode mode_;
     DiagBag* diagnostics_;
     std::size_t pos_ = 0;
+    /// True once something other than a label has been emitted on this line.
+    /// A directive is only a directive in the leading position: `.zero` at the
+    /// start of a statement reserves bytes, while `beqz t0, .zero` refers to a
+    /// local label that happens to share the name.
+    bool past_leading_token_ = false;
 };
 
 /// Convenience for the highlighter: tokenize without any diagnostics.

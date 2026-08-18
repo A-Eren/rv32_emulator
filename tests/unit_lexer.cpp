@@ -84,6 +84,22 @@ RV_TEST(lexer, directives_are_distinguished_from_local_labels) {
     RV_CHECK_EQ(static_cast<int>(lex(".")[0].kind), static_cast<int>(TokenKind::Dot));
 }
 
+RV_TEST(lexer, a_directive_name_is_only_a_directive_in_the_leading_position) {
+    // `.zero` and `.align` are directives *and* perfectly ordinary local label
+    // names. Position decides, exactly as it does in a real assembler --
+    // otherwise `beqz t0, .zero` would be unwritable.
+    RV_CHECK_EQ(static_cast<int>(lex(".zero 4")[0].kind), static_cast<int>(TokenKind::Directive));
+
+    const std::vector<Token> reference = lex("beqz t0, .zero");
+    RV_CHECK_EQ(static_cast<int>(reference[3].kind), static_cast<int>(TokenKind::Ident));
+    RV_CHECK_EQ(reference[3].text, ".zero");
+
+    // A label still precedes the statement, so it does not close the position.
+    const std::vector<Token> labelled = lex("here:  .align 2");
+    RV_CHECK_EQ(static_cast<int>(labelled[0].kind), static_cast<int>(TokenKind::Label));
+    RV_CHECK_EQ(static_cast<int>(labelled[1].kind), static_cast<int>(TokenKind::Directive));
+}
+
 RV_TEST(lexer, number_bases) {
     RV_CHECK_EQ(lex("42")[0].number, 42u);
     RV_CHECK_EQ(lex("0x2a")[0].number, 42u);

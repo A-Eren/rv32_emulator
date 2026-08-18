@@ -126,10 +126,11 @@ Token Lexer::lex_word(std::size_t start) {
         return token;
     }
 
-    // `.text` is a directive; `.L1` is a local label. The difference is whether
-    // the table knows the spelling, which is also how the highlighter decides
-    // what colour to use.
-    if (word.size() > 1 && word[0] == '.') {
+    // `.text` is a directive; `.L1` is a local label. Two things have to be
+    // true: the table knows the spelling, and we are still in the leading
+    // position. Without the second condition a local label named `.zero` or
+    // `.align` would be unusable, and those are perfectly ordinary names.
+    if (!past_leading_token_ && word.size() > 1 && word[0] == '.') {
         if (const DirectiveId id = lookup_directive(word); id != kInvalidDirective) {
             Token token = make(TokenKind::Directive, start);
             token.directive = id;
@@ -244,6 +245,17 @@ Token Lexer::lex_string(std::size_t start) {
 }
 
 Token Lexer::next() {
+    Token token = scan();
+    // Labels precede the statement they name, so they do not close the leading
+    // position; comments end the line and never matter.
+    if (token.kind != TokenKind::Label && token.kind != TokenKind::Comment &&
+        token.kind != TokenKind::End) {
+        past_leading_token_ = true;
+    }
+    return token;
+}
+
+Token Lexer::scan() {
     skip_whitespace();
     if (pos_ >= text_.size()) return make(TokenKind::End, pos_);
 
