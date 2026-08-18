@@ -87,10 +87,32 @@ target_link_libraries(rv_cmd PUBLIC rv_dbg)
 rv_set_warnings(rv_cmd)
 
 # ---------------------------------------------------------------------------
+# rv_tui -- the terminal interface.
+#
+# ncursesw appears in exactly one target and, inside it, in exactly two
+# translation units (term.cpp and curses_canvas.cpp). Everything else draws
+# through the Canvas abstraction. That is not purity theatre: <curses.h>
+# #defines `instr`, `move`, `clear`, `line` and `timeout`, and this codebase is
+# built around DecodedInstr.
+# ---------------------------------------------------------------------------
+find_package(Curses REQUIRED)
+
+add_library(rv_tui STATIC
+    src/tui/theme.cpp
+    src/tui/string_canvas.cpp
+    src/tui/key.cpp
+    src/tui/curses_canvas.cpp
+    src/tui/term.cpp
+)
+target_link_libraries(rv_tui PUBLIC rv_cmd PRIVATE ${CURSES_LIBRARIES})
+target_include_directories(rv_tui PRIVATE ${CURSES_INCLUDE_DIRS})
+rv_set_warnings(rv_tui)
+
+# ---------------------------------------------------------------------------
 # rv32 -- the front-end binary.
 # ---------------------------------------------------------------------------
 add_executable(rv32 src/main.cpp)
-target_link_libraries(rv32 PRIVATE rv_cmd)
+target_link_libraries(rv32 PRIVATE rv_tui)
 rv_set_warnings(rv32)
 
 # ---------------------------------------------------------------------------
@@ -114,7 +136,7 @@ add_executable(rv_tests
     tests/unit_assembler.cpp
     tests/unit_session.cpp
 )
-target_link_libraries(rv_tests PRIVATE rv_cmd)
+target_link_libraries(rv_tests PRIVATE rv_tui)
 target_include_directories(rv_tests PRIVATE tests)
 rv_set_warnings(rv_tests)
 
