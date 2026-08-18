@@ -1,0 +1,117 @@
+# rv32
+
+An RV32IM_Zicsr emulator, assembler and debugger built for **learning and
+teaching assembly**. Not a fast emulator — a visible one. Every design decision
+serves three questions:
+
+1. **What exactly changed in this step?** — register and memory diff highlighting
+2. **How did this instruction become 32 bits?** — a bitfield breakdown panel
+3. **Why did it not assemble?** — line, column, caret, and a suggested fix
+
+The centrepiece is an embedded editor: write assembly in the app, press F5,
+and step through what you wrote.
+
+## Status
+
+| Milestone | Scope | State |
+|---|---|---|
+| M0 | Build skeleton, test harness | ✅ done |
+| M1 | Registers, memory, first instructions | ✅ done |
+| M2 | Full ISA, traps, CSRs, disassembler, `.mem` export | 🔨 in progress |
+| M3 | Assembler + source map | — |
+| M4 | CLI debugger | — |
+| M5 | TUI shell | — |
+| M6 | Embedded editor | — |
+| M7 | Encoding panel, diff highlighting, reverse step | — |
+| M8 | Polish | — |
+
+## Building
+
+Requires a C++17 compiler, CMake 3.20+, Ninja, and `ncursesw` (for the TUI, from M5).
+No other dependencies: the test harness is 150 lines in `tests/rv_test.hpp`, and
+there is no external RISC-V toolchain — this project assembles its own code.
+
+```bash
+cmake --preset debug
+cmake --build build/debug
+ctest --preset debug
+```
+
+Presets: `debug` (warnings as errors), `asan` (+ASan/UBSan), `release`.
+
+## Trying it
+
+```bash
+# Execute raw instruction words and watch the registers change
+./build/debug/rv32 exec 00500093 00300113 002081b3 00100073
+```
+
+```
+addr      word      instruction              effect
+-------------------------------------------------------------
+00000000  00500093  addi ra, zero, 5        ra = 0x00000005
+00000004  00300113  addi sp, zero, 3        sp = 0x00000003
+00000008  002081b3  add gp, ra, sp          gp = 0x00000008
+0000000c  00100073  ebreak
+```
+
+## Architecture
+
+The rule that shapes everything: **ncurses appears in exactly one library and
+two translation units.** Beyond testability, `<curses.h>` `#define`s ordinary
+words — including `instr`, `move`, `clear`, `line` and `timeout` — so letting it
+leak into a codebase full of `DecodedInstr` would produce unreadable errors.
+
+```
+rv_isa    instruction table, encode, decode, disassemble    (no dependencies)
+ ├── rv_core   registers, memory, MMIO, execute, traps
+ └── rv_asm    lexer, parser, assembler                     (M3)
+       └── rv_dbg    breakpoints, stepping, reverse step    (M4)
+             └── rv_cmd    command registry + REPL, no ncurses
+                   ├── rv_tui    the TUI                    (M5)
+                   └── rv32      the binary
+```
+
+`rv_cmd` sitting *below* both front-ends is deliberate: `break`, `step` and
+`x/16xw` are implemented once, and the TUI's `:` prompt runs the same code the
+CLI does.
+
+### The ISA is described once
+
+`src/isa/instr_table.def` is an X-macro table with one row per instruction. It
+generates the `InstrId` enum, the descriptor table, and the mnemonic lookup —
+so the decoder, the disassembler, the encoder and the assembler all read from
+one description and cannot drift apart.
+
+Execution semantics deliberately stay out of it. `src/core/exec.cpp` is a plain
+`switch` over `InstrId` with **no `default:` label**, compiled under
+`-Werror=switch`: adding a row to the table breaks the build until the executor
+handles it. That is the same "you cannot forget one" guarantee a generated
+dispatch table gives, without putting semantics inside a macro — and semantics
+are exactly what this project exists to make readable.
+
+### Harvard memory — and what it costs
+
+IMEM (16 KB) and DMEM (16 KB) are **separate address spaces**, both starting at
+0. Instruction fetch never touches the data bus. See `docs/memory-map.md` for
+the consequence that shapes the assembler: `la a0, some_data_label` cannot use
+`auipc`, because that would compute an address in the wrong space.
+
+## Testing
+
+```bash
+ctest --preset debug                    # everything
+./build/debug/rv_tests --filter=exec_m  # one suite
+./build/debug/rv_tests --list           # what exists
+```
+
+With no reference toolchain available, correctness comes from three sources:
+
+- **Round-trip properties** — `encode(decode(w)) == w` over 500 000 random
+  words, plus every table row against itself. No golden files, and it catches
+  any misplaced bit mechanically.
+- **A semantic checklist** — each test cites the spec rule it enforces
+  (`jalr` clearing the low bit, `div` by zero yielding −1, `srai` sign
+  behaviour, shift amounts masked to 5 bits).
+- **Self-checking `.s` programs** (from M3) — riscv-tests style, written in the
+  language the tool is *for*.

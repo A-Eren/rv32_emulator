@@ -1,0 +1,95 @@
+// THE instruction set, described exactly once.
+//
+// This file is #included several times with RV_INSTR defined differently each
+// time, to generate: the InstrId enum, the InstrDesc table, and the
+// mnemonic -> id lookup. The decoder, the disassembler and the assembler all
+// read from that one table, so a wrong funct3 is wrong everywhere at once
+// (and therefore caught by the first round-trip test) instead of being wrong
+// in one direction only and surviving for weeks.
+//
+// Execution semantics deliberately live elsewhere: src/core/exec.cpp switches
+// over InstrId with no default label under -Werror=switch, so adding a row here
+// breaks the build until the executor handles it.
+//
+//   id      mnemonic  fmt  match       mask        syntax        group
+//
+// match/mask: an instruction word w decodes to this row iff (w & mask) == match.
+
+// ---- RV32I: upper immediates and jumps ------------------------------------
+RV_INSTR(LUI,    "lui",    U,    0x00000037, 0x0000007f, RD_UIMM,      Upper)
+RV_INSTR(AUIPC,  "auipc",  U,    0x00000017, 0x0000007f, RD_UIMM,      Upper)
+RV_INSTR(JAL,    "jal",    J,    0x0000006f, 0x0000007f, RD_LBL,       Jump)
+RV_INSTR(JALR,   "jalr",   I,    0x00000067, 0x0000707f, RD_OFS_RS1,   Jump)
+
+// ---- RV32I: branches ------------------------------------------------------
+RV_INSTR(BEQ,    "beq",    B,    0x00000063, 0x0000707f, RS1_RS2_LBL,  Branch)
+RV_INSTR(BNE,    "bne",    B,    0x00001063, 0x0000707f, RS1_RS2_LBL,  Branch)
+RV_INSTR(BLT,    "blt",    B,    0x00004063, 0x0000707f, RS1_RS2_LBL,  Branch)
+RV_INSTR(BGE,    "bge",    B,    0x00005063, 0x0000707f, RS1_RS2_LBL,  Branch)
+RV_INSTR(BLTU,   "bltu",   B,    0x00006063, 0x0000707f, RS1_RS2_LBL,  Branch)
+RV_INSTR(BGEU,   "bgeu",   B,    0x00007063, 0x0000707f, RS1_RS2_LBL,  Branch)
+
+// ---- RV32I: loads ---------------------------------------------------------
+RV_INSTR(LB,     "lb",     I,    0x00000003, 0x0000707f, RD_OFS_RS1,   Load)
+RV_INSTR(LH,     "lh",     I,    0x00001003, 0x0000707f, RD_OFS_RS1,   Load)
+RV_INSTR(LW,     "lw",     I,    0x00002003, 0x0000707f, RD_OFS_RS1,   Load)
+RV_INSTR(LBU,    "lbu",    I,    0x00004003, 0x0000707f, RD_OFS_RS1,   Load)
+RV_INSTR(LHU,    "lhu",    I,    0x00005003, 0x0000707f, RD_OFS_RS1,   Load)
+
+// ---- RV32I: stores --------------------------------------------------------
+RV_INSTR(SB,     "sb",     S,    0x00000023, 0x0000707f, RS2_OFS_RS1,  Store)
+RV_INSTR(SH,     "sh",     S,    0x00001023, 0x0000707f, RS2_OFS_RS1,  Store)
+RV_INSTR(SW,     "sw",     S,    0x00002023, 0x0000707f, RS2_OFS_RS1,  Store)
+
+// ---- RV32I: register-immediate arithmetic ---------------------------------
+RV_INSTR(ADDI,   "addi",   I,    0x00000013, 0x0000707f, RD_RS1_IMM,   ArithI)
+RV_INSTR(SLTI,   "slti",   I,    0x00002013, 0x0000707f, RD_RS1_IMM,   ArithI)
+RV_INSTR(SLTIU,  "sltiu",  I,    0x00003013, 0x0000707f, RD_RS1_IMM,   ArithI)
+RV_INSTR(XORI,   "xori",   I,    0x00004013, 0x0000707f, RD_RS1_IMM,   ArithI)
+RV_INSTR(ORI,    "ori",    I,    0x00006013, 0x0000707f, RD_RS1_IMM,   ArithI)
+RV_INSTR(ANDI,   "andi",   I,    0x00007013, 0x0000707f, RD_RS1_IMM,   ArithI)
+// The shift-immediates carry the shift *type* in funct7, so their mask is
+// wider than the other I-type rows.
+RV_INSTR(SLLI,   "slli",   I,    0x00001013, 0xfe00707f, RD_RS1_SHAMT, Shift)
+RV_INSTR(SRLI,   "srli",   I,    0x00005013, 0xfe00707f, RD_RS1_SHAMT, Shift)
+RV_INSTR(SRAI,   "srai",   I,    0x40005013, 0xfe00707f, RD_RS1_SHAMT, Shift)
+
+// ---- RV32I: register-register arithmetic ----------------------------------
+RV_INSTR(ADD,    "add",    R,    0x00000033, 0xfe00707f, RD_RS1_RS2,   ArithR)
+RV_INSTR(SUB,    "sub",    R,    0x40000033, 0xfe00707f, RD_RS1_RS2,   ArithR)
+RV_INSTR(SLL,    "sll",    R,    0x00001033, 0xfe00707f, RD_RS1_RS2,   Shift)
+RV_INSTR(SLT,    "slt",    R,    0x00002033, 0xfe00707f, RD_RS1_RS2,   ArithR)
+RV_INSTR(SLTU,   "sltu",   R,    0x00003033, 0xfe00707f, RD_RS1_RS2,   ArithR)
+RV_INSTR(XOR,    "xor",    R,    0x00004033, 0xfe00707f, RD_RS1_RS2,   ArithR)
+RV_INSTR(SRL,    "srl",    R,    0x00005033, 0xfe00707f, RD_RS1_RS2,   Shift)
+RV_INSTR(SRA,    "sra",    R,    0x40005033, 0xfe00707f, RD_RS1_RS2,   Shift)
+RV_INSTR(OR,     "or",     R,    0x00006033, 0xfe00707f, RD_RS1_RS2,   ArithR)
+RV_INSTR(AND,    "and",    R,    0x00007033, 0xfe00707f, RD_RS1_RS2,   ArithR)
+
+// ---- M extension: multiply and divide -------------------------------------
+RV_INSTR(MUL,    "mul",    R,    0x02000033, 0xfe00707f, RD_RS1_RS2,   MulDiv)
+RV_INSTR(MULH,   "mulh",   R,    0x02001033, 0xfe00707f, RD_RS1_RS2,   MulDiv)
+RV_INSTR(MULHSU, "mulhsu", R,    0x02002033, 0xfe00707f, RD_RS1_RS2,   MulDiv)
+RV_INSTR(MULHU,  "mulhu",  R,    0x02003033, 0xfe00707f, RD_RS1_RS2,   MulDiv)
+RV_INSTR(DIV,    "div",    R,    0x02004033, 0xfe00707f, RD_RS1_RS2,   MulDiv)
+RV_INSTR(DIVU,   "divu",   R,    0x02005033, 0xfe00707f, RD_RS1_RS2,   MulDiv)
+RV_INSTR(REM,    "rem",    R,    0x02006033, 0xfe00707f, RD_RS1_RS2,   MulDiv)
+RV_INSTR(REMU,   "remu",   R,    0x02007033, 0xfe00707f, RD_RS1_RS2,   MulDiv)
+
+// ---- Zicsr ----------------------------------------------------------------
+RV_INSTR(CSRRW,  "csrrw",  I,    0x00001073, 0x0000707f, RD_CSR_RS1,   Csr)
+RV_INSTR(CSRRS,  "csrrs",  I,    0x00002073, 0x0000707f, RD_CSR_RS1,   Csr)
+RV_INSTR(CSRRC,  "csrrc",  I,    0x00003073, 0x0000707f, RD_CSR_RS1,   Csr)
+RV_INSTR(CSRRWI, "csrrwi", I,    0x00005073, 0x0000707f, RD_CSR_ZIMM,  Csr)
+RV_INSTR(CSRRSI, "csrrsi", I,    0x00006073, 0x0000707f, RD_CSR_ZIMM,  Csr)
+RV_INSTR(CSRRCI, "csrrci", I,    0x00007073, 0x0000707f, RD_CSR_ZIMM,  Csr)
+
+// ---- System and memory ordering -------------------------------------------
+// Single-hart in-order machine: FENCE is architecturally a no-op here, but it
+// must still assemble and disassemble so that code written against a real
+// toolchain works unchanged.
+RV_INSTR(FENCE,  "fence",  I,    0x0000000f, 0x0000707f, NONE,         Fence)
+RV_INSTR(ECALL,  "ecall",  I,    0x00000073, 0xffffffff, NONE,         System)
+RV_INSTR(EBREAK, "ebreak", I,    0x00100073, 0xffffffff, NONE,         System)
+RV_INSTR(MRET,   "mret",   I,    0x30200073, 0xffffffff, NONE,         System)
+RV_INSTR(WFI,    "wfi",    I,    0x10500073, 0xffffffff, NONE,         System)

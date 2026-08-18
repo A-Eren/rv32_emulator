@@ -1,0 +1,4 @@
+build/
+*.mem
+compile_commands.json
+.cache/
