@@ -63,14 +63,23 @@ public:
 
     int put(int x, int y, std::string_view text, StyleId style = StyleId::Normal) {
         if (y < 0 || y >= area_.height || x >= area_.width) return 0;
-        // Clip on the left by dropping leading code points rather than bytes.
+
+        // Clip on the left by dropping leading code points, not bytes.
         while (x < 0 && !text.empty()) {
-            const std::size_t length = utf8_length(text, 0);
-            text.remove_prefix(length);
+            text.remove_prefix(utf8_length(text, 0));
             ++x;
         }
         if (text.empty() || x < 0) return 0;
-        return canvas_->put(area_.x + x, area_.y + y, text, style);
+
+        // And on the right. Without this a widget could scribble across its
+        // neighbour: the underlying canvas only knows the screen's edge, not
+        // this pane's.
+        const int room = area_.width - x;
+        std::size_t bytes = 0;
+        for (int columns = 0; columns < room && bytes < text.size(); ++columns) {
+            bytes += utf8_length(text, bytes);
+        }
+        return canvas_->put(area_.x + x, area_.y + y, text.substr(0, bytes), style);
     }
 
     /// Draw text and return the column just past it, so callers can chain
