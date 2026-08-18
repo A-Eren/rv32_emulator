@@ -1,5 +1,7 @@
 # rv32
 
+[![build and test](https://github.com/A-Eren/rv32/actions/workflows/ci.yml/badge.svg)](https://github.com/A-Eren/rv32/actions/workflows/ci.yml)
+
 An RV32IM_Zicsr emulator, assembler and debugger built for **learning and
 teaching assembly**, with machine-mode interrupts. Not a fast emulator — a visible one. Every design decision
 serves three questions:
@@ -178,3 +180,7 @@ With no reference toolchain available, correctness comes from three sources:
   the interface is tested by pressing keys and looking at the resulting frame.
   That is the same path `--render-once` takes, so the tests cover the real code
   rather than a parallel one.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

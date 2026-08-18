@@ -1,0 +1,59 @@
+name: build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both compilers, because -Werror is on: a warning only one of them
+        # emits should still fail the build rather than sit there unnoticed.
+        compiler: [g++, clang++]
+        preset: [debug, asan]
+    runs-on: ubuntu-latest
+    name: ${{ matrix.compiler }} / ${{ matrix.preset }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libncursesw5-dev
+
+      - name: Configure
+        env:
+          CXX: ${{ matrix.compiler }}
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build build/${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+      # The self-checking assembly programs and the examples exercise the whole
+      # pipeline -- assembler, encoder, decoder, executor, traps -- in one go,
+      # so a green unit suite with broken end-to-end behaviour cannot slip past.
+      - name: Run the example programs
+        run: |
+          set -e
+          for f in examples/*.s; do
+            echo "--- $f"
+            ./build/${{ matrix.preset }}/rv32 run "$f" --quiet
+          done
+
+      - name: Check the .mem export
+        run: |
+          ./build/${{ matrix.preset }}/rv32 asm examples/fib.s -o /tmp/imem.mem --dmem /tmp/dmem.mem
+          head -4 /tmp/imem.mem
+          # Every line must be exactly eight lowercase hex digits.
+          grep -qvE '^[0-9a-f]{8}$' /tmp/imem.mem && exit 1 || true
+
+      - name: Render one TUI frame headlessly
+        run: ./build/${{ matrix.preset }}/rv32 tui examples/fib.s --render-once
