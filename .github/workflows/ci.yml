@@ -24,7 +24,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build libncursesw5-dev
+          sudo apt-get install -y ninja-build libncursesw5-dev qt6-base-dev
 
       - name: Configure
         env:
@@ -57,3 +57,11 @@ jobs:
 
       - name: Render one TUI frame headlessly
         run: ./build/${{ matrix.preset }}/rv32 tui examples/fib.s --render-once
+
+      # The GUI is exercised the same way: created for real on Qt's offscreen
+      # platform, driven through the actions the toolbar calls, then asked what
+      # it shows. No display needed.
+      - name: Render one GUI frame headlessly
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ./build/${{ matrix.preset }}/rv32-gui examples/fib.s --screenshot /tmp/rv32.png --steps 6

@@ -1,0 +1,116 @@
+// The application window.
+//
+// Everything below this layer is the same code the terminal front-end and the
+// CLI use: DebugSession for the machine, rv_cmd for the command set, the
+// assembler's lexer for highlighting. This file is a shell, not a second
+// implementation -- which is why the two interfaces cannot disagree about what
+// stepping means.
+#pragma once
+
+#include <QMainWindow>
+#include <QString>
+#include <memory>
+
+#include "asm/diagnostic.hpp"
+#include "dbg/session.hpp"
+
+class QAction;
+class QLabel;
+class QListWidget;
+class QPlainTextEdit;
+class QTableWidget;
+class QSplitter;
+class QTabWidget;
+class QTimer;
+
+namespace rv::gui {
+
+class EditorWidget;
+class EncodingWidget;
+
+class MainWindow final : public QMainWindow {
+    Q_OBJECT
+
+public:
+    explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override;
+
+    /// Load a file into the editor and assemble it. Returns false if it did not
+    /// assemble; the diagnostics are shown either way.
+    bool open_file(const QString& path);
+
+    // Exposed so the offscreen tests can drive the window the way a person
+    // would, rather than reaching into its internals.
+    void assemble();
+    void step_line();
+    void step_instruction();
+    void step_over();
+    void run();
+    void step_back();
+    void reset_machine();
+    void toggle_breakpoint(int line);
+
+    dbg::DebugSession& session() { return *session_; }
+    EditorWidget& editor() { return *editor_; }
+    QString status_text() const;
+
+private slots:
+    void on_new_file();
+    void on_open_file();
+    void on_save();
+    void on_save_as();
+    void on_diagnostic_activated(int row);
+    void on_cursor_moved();
+    void on_run_slice();
+
+private:
+    void build_actions();
+    void build_layout();
+    void refresh_all();
+    void refresh_registers();
+    void refresh_memory();
+    void refresh_console();
+    void refresh_io();
+    void refresh_symbols();
+    void refresh_diagnostics();
+    void refresh_status();
+    void report_stop(const dbg::StopEvent& event);
+    void set_message(const QString& text, bool is_error = false);
+    bool confirm_discard();
+
+    std::unique_ptr<dbg::DebugSession> session_;
+    /// Diagnostics from the last assemble *attempt*, successful or not. A
+    /// failed attempt never reaches the session -- that is deliberate, so a
+    /// broken edit cannot destroy the loaded program -- so its errors have to
+    /// be kept here or they would never be shown.
+    as::DiagBag last_diagnostics_;
+
+    EditorWidget* editor_ = nullptr;
+    EncodingWidget* encoding_ = nullptr;
+    QTableWidget* registers_ = nullptr;
+    QPlainTextEdit* memory_ = nullptr;
+    QPlainTextEdit* console_ = nullptr;
+    QPlainTextEdit* io_ = nullptr;
+    QTableWidget* symbols_ = nullptr;
+    QListWidget* diagnostics_ = nullptr;
+    QTabWidget* dock_ = nullptr;
+    QSplitter* whole_ = nullptr;
+    QLabel* status_ = nullptr;
+    QLabel* message_ = nullptr;
+
+    QAction* action_back_ = nullptr;
+
+    /// Drives a long `run` in slices so the window stays responsive without a
+    /// worker thread -- speed is not a goal here, and a thread would buy a
+    /// class of nondeterministic bugs for nothing.
+    QTimer* run_timer_ = nullptr;
+
+    QString path_;
+    /// Buffer revision at the last successful assemble, so the status bar can
+    /// say whether what is on screen has been built.
+    int assembled_revision_ = -1;
+    bool message_is_error_ = false;
+    QString message_text_;
+};
+
+}  // namespace rv::gui

@@ -10,8 +10,9 @@ serves three questions:
 2. **How did this instruction become 32 bits?** — a bitfield breakdown panel
 3. **Why did it not assemble?** — line, column, caret, and a suggested fix
 
-The centrepiece is an embedded editor: write assembly in the app, press F5,
-and step through what you wrote.
+The centrepiece is an embedded editor: write assembly, press F5, and step
+through what you wrote. There are two front-ends — a desktop window and a
+terminal one — over the same engine.
 
 ```
   EDIT  fib.s*   Ln 3, Col 5  1 error
@@ -40,7 +41,13 @@ F5 assemble+debug  ^S save  ^Z undo  F9 bp  F4 next error  ? help  ^Q quit
 
 ## Building
 
-Requires a C++17 compiler, CMake 3.20+, Ninja, and `ncursesw` (for the TUI, from M5).
+Requires a C++17 compiler, CMake 3.20+, Ninja and `ncursesw`. Qt6 is optional:
+without it everything still builds, minus the desktop window.
+
+```bash
+sudo apt install ninja-build libncursesw5-dev qt6-base-dev
+```
+
 No other dependencies: the test harness is 150 lines in `tests/rv_test.hpp`, and
 there is no external RISC-V toolchain — this project assembles its own code.
 
@@ -62,7 +69,8 @@ Presets: `debug` (warnings as errors), `asan` (+ASan/UBSan), `release`.
 ./build/debug/rv32 run examples/timer.s        # a timer interrupt, from scratch
 ./build/debug/rv32 test tests/asm/*.s          # self-checking assembly tests
 ./build/debug/rv32 dbg examples/fib.s          # interactive debugger
-./build/debug/rv32 tui examples/fib.s          # full-screen debugger
+./build/debug/rv32-gui examples/fib.s          # desktop window (needs Qt6)
+./build/debug/rv32 tui examples/fib.s          # full-screen terminal debugger
 ./build/debug/rv32 tui examples/fib.s --edit   # ... starting in the editor
 ```
 
@@ -124,13 +132,18 @@ leak into a codebase full of `DecodedInstr` would produce unreadable errors.
 
 ```
 rv_isa    instruction table, encode, decode, disassemble    (no dependencies)
- ├── rv_core   registers, memory, MMIO, execute, traps
- └── rv_asm    lexer, parser, assembler                     (M3)
-       └── rv_dbg    breakpoints, stepping, reverse step    (M4)
-             └── rv_cmd    command registry + REPL, no ncurses
-                   ├── rv_tui    the TUI                    (M5)
-                   └── rv32      the binary
+ ├── rv_core   registers, memory, MMIO, execute, traps, interrupts
+ └── rv_asm    lexer, parser, assembler
+       └── rv_dbg    breakpoints, stepping, reverse step
+             └── rv_cmd    command registry + REPL, no ncurses, no Qt
+                   ├── rv_tui     the terminal interface
+                   ├── rv32-gui   the desktop window
+                   └── rv32       the binary
 ```
+
+Both front-ends are shells over `DebugSession` and `rv_cmd`. Neither implements
+stepping, breakpoints or highlighting of its own, which is why they cannot
+disagree about what any of those mean.
 
 `rv_cmd` sitting *below* both front-ends is deliberate: `break`, `step` and
 `x/16xw` are implemented once, and the TUI's `:` prompt runs the same code the

@@ -119,6 +119,48 @@ target_include_directories(rv_tui PRIVATE ${CURSES_INCLUDE_DIRS})
 rv_set_warnings(rv_tui)
 
 # ---------------------------------------------------------------------------
+# rv_gui -- the desktop interface.
+#
+# Optional: without Qt everything else still builds, so CI and anyone who only
+# wants the CLI are unaffected. Like the TUI, it is a shell over DebugSession
+# and rv_cmd rather than a second implementation of anything.
+# ---------------------------------------------------------------------------
+find_package(Qt6 QUIET COMPONENTS Widgets)
+
+if(Qt6_FOUND)
+    set(CMAKE_AUTOMOC ON)
+    add_executable(rv32-gui
+        src/gui/gui_main.cpp
+        src/gui/main_window.cpp
+        src/gui/editor_widget.cpp
+        src/gui/encoding_widget.cpp
+        src/gui/highlighter.cpp
+    )
+    target_link_libraries(rv32-gui PRIVATE rv_cmd Qt6::Widgets)
+    rv_set_warnings(rv32-gui)
+    # Qt's generated moc code trips warnings we hold our own code to.
+    target_compile_options(rv32-gui PRIVATE -Wno-old-style-cast)
+    # The GUI is tested the same way the TUI is: created for real, driven
+    # through the actions the toolbar calls, then asked what it shows. Qt's
+    # offscreen platform means no display is needed, so this runs in CI.
+    add_executable(rv_gui_tests
+        tests/gui_test.cpp
+        src/gui/main_window.cpp
+        src/gui/editor_widget.cpp
+        src/gui/encoding_widget.cpp
+        src/gui/highlighter.cpp
+    )
+    target_link_libraries(rv_gui_tests PRIVATE rv_cmd Qt6::Widgets)
+    target_include_directories(rv_gui_tests PRIVATE tests)
+    rv_set_warnings(rv_gui_tests)
+    target_compile_options(rv_gui_tests PRIVATE -Wno-old-style-cast)
+
+    message(STATUS "Qt6 found: building rv32-gui")
+else()
+    message(STATUS "Qt6 not found: skipping rv32-gui (the CLI and TUI are unaffected)")
+endif()
+
+# ---------------------------------------------------------------------------
 # rv32 -- the front-end binary.
 # ---------------------------------------------------------------------------
 add_executable(rv32 src/main.cpp)
@@ -160,6 +202,11 @@ foreach(suite fields decode roundtrip exec_alu exec_mem exec_branch exec_m exec_
               lexer diag_render assembler session render app editor)
     add_test(NAME unit.${suite} COMMAND rv_tests --filter=${suite})
 endforeach()
+
+if(TARGET rv_gui_tests)
+    add_test(NAME unit.gui COMMAND rv_gui_tests)
+    set_tests_properties(unit.gui PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
 
 # Self-checking assembly programs: one CTest each, so a failure names the file.
 # Globbed at configure time, so re-run cmake after adding one.
