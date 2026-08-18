@@ -53,7 +53,10 @@ std::string format_registers(const dbg::DebugSession& session, const FormatOptio
         const u32 value = session.cpu().x[reg];
         const bool marked = options.highlight_changes && changed_recently(session, reg);
         char cell[64];
-        std::snprintf(cell, sizeof cell, "%c%-4s %-8s", marked ? '*' : ' ',
+        // The change marker leads its own cell, so the trailing space matters:
+        // without it the '*' would sit against the previous register's value
+        // and look as though it belonged to that one.
+        std::snprintf(cell, sizeof cell, "%c%-4s %-8s ", marked ? '*' : ' ',
                       options.numeric_registers ? isa::numeric_name(reg).data()
                                                 : isa::abi_name(reg).data(),
                       hex32(value).c_str());

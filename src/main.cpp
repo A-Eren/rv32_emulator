@@ -11,9 +11,11 @@
 #include <vector>
 
 #include <fstream>
+#include <iostream>
 #include <sstream>
 
 #include "asm/assembler.hpp"
+#include "cmd/repl.hpp"
 #include "asm/diag_render.hpp"
 #include "core/hart.hpp"
 #include "core/memfile.hpp"
@@ -36,6 +38,7 @@ void print_usage() {
         "  dis <imem.mem>        disassemble a $readmemh image\n"
         "  exec <word>...        execute raw instruction words given as hex\n"
         "  test <file.s>...      run self-checking assembly tests\n"
+        "  dbg <file.s>          open the interactive debugger\n"
         "  --version, --help\n"
         "\n"
         "options:\n"
@@ -313,6 +316,52 @@ int command_test(const std::vector<std::string>& args) {
     return failures == 0 ? 0 : 1;
 }
 
+int command_dbg(const std::vector<std::string>& args) {
+    Options options;
+    if (!parse_options(args, options)) return 2;
+    if (options.positional.size() != 1) {
+        std::fprintf(stderr, "rv32: dbg needs exactly one source file\n");
+        return 2;
+    }
+
+    std::ifstream file(options.positional[0], std::ios::binary);
+    if (!file) {
+        std::fprintf(stderr, "rv32: cannot open '%s'\n", options.positional[0].c_str());
+        return 1;
+    }
+    std::ostringstream contents;
+    contents << file.rdbuf();
+
+    dbg::DebugSession session;
+    as::AssembleOptions assemble_options;
+    assemble_options.strict_word_mem = options.strict_word_mem;
+    assemble_options.explain_pseudo_sizing = options.explain;
+
+    if (!session.load_source(contents.str(), options.positional[0], assemble_options)) {
+        as::RenderOptions render_options;
+        render_options.color = isatty(fileno(stderr)) != 0;
+        std::fputs(as::render_all(session.program().diagnostics, session.source(), render_options)
+                       .c_str(),
+                   stderr);
+        return 1;
+    }
+
+    const bool interactive = isatty(fileno(stdin)) != 0;
+    cmd::ReplOptions repl_options;
+    repl_options.color = isatty(fileno(stdout)) != 0;
+    // A piped script's output is unreadable without knowing which command
+    // produced it, so echo when we are not talking to a person.
+    repl_options.echo = !interactive;
+    repl_options.format.numeric_registers = options.numeric;
+
+    std::printf("%s\n%zu instructions, entry 0x%08x. Type 'help' for commands.\n\n", kVersion,
+                session.program().imem_words.size(), session.program().entry);
+    std::fputs(cmd::format_location(session, repl_options.format).c_str(), stdout);
+
+    cmd::Repl repl(session, repl_options);
+    return repl.run(std::cin, std::cout);
+}
+
 int command_exec(const std::vector<std::string>& args) {
     Options options;
     options.limit = 1000;
@@ -432,6 +481,7 @@ int main(int argc, char** argv) {
     const std::vector<std::string> rest(args.begin() + 1, args.end());
     if (args[0] == "asm") return command_asm(rest);
     if (args[0] == "test") return command_test(rest);
+    if (args[0] == "dbg") return command_dbg(rest);
     if (args[0] == "exec") return command_exec(rest);
     if (args[0] == "run") return command_run(rest);
     if (args[0] == "dis") return command_dis(rest);

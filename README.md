@@ -19,8 +19,8 @@ and step through what you wrote.
 | M1 | Registers, memory, first instructions | ✅ done |
 | M2 | Full ISA, traps, CSRs, disassembler, `.mem` export | ✅ done |
 | M3 | Assembler + source map | ✅ done |
-| M4 | CLI debugger | 🔨 next |
-| M5 | TUI shell | — |
+| M4 | CLI debugger | ✅ done |
+| M5 | TUI shell | 🔨 next |
 | M6 | Embedded editor | — |
 | M7 | Encoding panel, diff highlighting, reverse step | — |
 | M8 | Polish | — |
@@ -47,7 +47,26 @@ Presets: `debug` (warnings as errors), `asan` (+ASan/UBSan), `release`.
 ./build/debug/rv32 asm examples/fib.s --annotate   # ... with disassembly comments
 ./build/debug/rv32 run examples/fib.s --trace  # one line per instruction
 ./build/debug/rv32 test tests/asm/*.s          # self-checking assembly tests
+./build/debug/rv32 dbg examples/fib.s          # interactive debugger
 ```
+
+The debugger steps by source line by default, so a `li` that expands to two
+instructions counts as one step — and `si` shows the seam:
+
+```
+(rv32) break done
+breakpoint 1 at line 32
+(rv32) run
+breakpoint 1 at 0x00000028 (line 32)
+=> 00000028  lui a0, 0x0        [line 32, 1/2]
+   la      a0, result
+(rv32) back
+=> 00000024  jal zero, 0x10        [line 27]
+   j       loop
+```
+
+`back` is not a typo: every step records what it changed, so execution runs
+backwards as easily as forwards.
 
 The error messages are the part worth looking at:
 

@@ -1,6 +1,5 @@
 #include "cmd/command.hpp"
 
-#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -43,6 +42,27 @@ std::optional<i64> resolve_value(const dbg::DebugSession& session, const std::st
 std::optional<Addr> resolve_address(const dbg::DebugSession& session, const std::string& text) {
     if (const auto value = resolve_value(session, text)) return static_cast<Addr>(*value);
     return std::nullopt;
+}
+
+/// Explain a failed lookup, suggesting a symbol or register when one is close.
+/// Same reasoning as the assembler's diagnostics: a name that is nearly right
+/// is the common case, and pointing at the right one turns a dead end into a
+/// fix.
+std::string cannot_resolve(const dbg::DebugSession& session, const std::string& text) {
+    std::vector<std::string_view> candidates = session.symbols().names();
+    for (RegIdx reg = 0; reg < kNumRegs; ++reg) {
+        candidates.push_back(isa::abi_name(reg));
+        candidates.push_back(isa::numeric_name(reg));
+    }
+    std::string message = "cannot resolve '" + text + "'";
+    if (const auto suggestion = as::closest_match(text, candidates); !suggestion.empty()) {
+        message += " (did you mean '" + std::string(suggestion) + "'?)";
+    } else if (session.symbols().all().empty()) {
+        message += "; no symbols are loaded";
+    } else {
+        message += "; try 'info symbols' for what is defined";
+    }
+    return message;
 }
 
 /// Report where and why execution stopped, then show the new location.
@@ -196,7 +216,7 @@ CmdResult cmd_break(CmdContext& context, const std::vector<std::string>& args) {
     // `break *0x24` sets one on a raw address rather than a line.
     if (args[1][0] == '*') {
         const auto addr = resolve_address(session, args[1].substr(1));
-        if (!addr) return CmdResult::failure("cannot resolve address: " + args[1].substr(1));
+        if (!addr) return CmdResult::failure(cannot_resolve(context.session, args[1].substr(1)));
         const dbg::Breakpoint* breakpoint = session.breakpoints().add_addr(*addr, session.map());
         char message[128];
         std::snprintf(message, sizeof message, "breakpoint %u at 0x%08x\n", breakpoint->id,
@@ -245,7 +265,7 @@ CmdResult cmd_break(CmdContext& context, const std::vector<std::string>& args) {
 CmdResult cmd_watch(CmdContext& context, const std::vector<std::string>& args) {
     if (args.size() < 2) return CmdResult::failure("usage: watch <address|symbol>");
     const auto addr = resolve_address(context.session, args[1]);
-    if (!addr) return CmdResult::failure("cannot resolve: " + args[1]);
+    if (!addr) return CmdResult::failure(cannot_resolve(context.session, args[1]));
     const u32 current = context.session.read_dmem_word(*addr & ~3u);
     const dbg::Watchpoint* watchpoint = context.session.breakpoints().add_watch(*addr & ~3u, current);
     char message[128];
@@ -354,7 +374,7 @@ CmdResult cmd_examine(CmdContext& context, const std::vector<std::string>& args)
     if (args.size() <= next) return CmdResult::failure("usage: x/<count><format><unit> <address>");
 
     const auto addr = resolve_address(context.session, args[next]);
-    if (!addr) return CmdResult::failure("cannot resolve address: " + args[next]);
+    if (!addr) return CmdResult::failure(cannot_resolve(context.session, args[next]));
     context.print(examine(context.session, *addr, spec, context.format));
     return CmdResult::success();
 }
@@ -369,7 +389,7 @@ CmdResult cmd_print(CmdContext& context, const std::vector<std::string>& args) {
     }
 
     const auto value = resolve_value(context.session, args[1]);
-    if (!value) return CmdResult::failure("cannot resolve: " + args[1]);
+    if (!value) return CmdResult::failure(cannot_resolve(context.session, args[1]));
 
     char message[192];
     if (const as::Symbol* symbol = context.session.symbols().find(args[1])) {
@@ -389,7 +409,7 @@ CmdResult cmd_set(CmdContext& context, const std::vector<std::string>& args) {
     const std::string name = args[1][0] == '$' ? args[1].substr(1) : args[1];
 
     const auto value = resolve_value(context.session, args[2]);
-    if (!value) return CmdResult::failure("cannot resolve: " + args[2]);
+    if (!value) return CmdResult::failure(cannot_resolve(context.session, args[2]));
 
     if (name == "pc") {
         context.session.hart().cpu().pc = static_cast<Addr>(*value);
@@ -410,7 +430,7 @@ CmdResult cmd_disassemble(CmdContext& context, const std::vector<std::string>& a
     u32 count = 10;
     if (args.size() > 1) {
         const auto resolved = resolve_address(context.session, args[1]);
-        if (!resolved) return CmdResult::failure("cannot resolve address: " + args[1]);
+        if (!resolved) return CmdResult::failure(cannot_resolve(context.session, args[1]));
         addr = *resolved;
     }
     if (args.size() > 2) count = static_cast<u32>(std::strtoul(args[2].c_str(), nullptr, 0));
@@ -528,8 +548,16 @@ std::vector<std::string_view> CommandRegistry::names() const {
 }
 
 CmdResult CommandRegistry::execute(CmdContext& context, std::string_view line) const {
-    const std::vector<std::string> args = tokenize_command(line);
+    std::vector<std::string> args = tokenize_command(line);
     if (args.empty()) return CmdResult::success();
+
+    // `x/16xw addr` is one whitespace token but two arguments. Splitting at the
+    // slash here means the format spec reaches the command the same way whether
+    // it was written attached or separated.
+    if (const std::size_t slash = args[0].find('/'); slash != std::string::npos && slash > 0) {
+        args.insert(args.begin() + 1, args[0].substr(slash));
+        args[0].erase(slash);
+    }
 
     const Command* command = find(args[0]);
     if (command == nullptr) {

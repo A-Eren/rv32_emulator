@@ -75,10 +75,22 @@ target_link_libraries(rv_dbg PUBLIC rv_asm)
 rv_set_warnings(rv_dbg)
 
 # ---------------------------------------------------------------------------
+# rv_cmd -- the command set and the line-based REPL, shared by both front-ends.
+# Must not depend on ncurses: the TUI's ':' prompt runs exactly this code.
+# ---------------------------------------------------------------------------
+add_library(rv_cmd STATIC
+    src/cmd/format.cpp
+    src/cmd/commands.cpp
+    src/cmd/repl.cpp
+)
+target_link_libraries(rv_cmd PUBLIC rv_dbg)
+rv_set_warnings(rv_cmd)
+
+# ---------------------------------------------------------------------------
 # rv32 -- the front-end binary.
 # ---------------------------------------------------------------------------
 add_executable(rv32 src/main.cpp)
-target_link_libraries(rv32 PRIVATE rv_dbg)
+target_link_libraries(rv32 PRIVATE rv_cmd)
 rv_set_warnings(rv32)
 
 # ---------------------------------------------------------------------------
@@ -100,14 +112,15 @@ add_executable(rv_tests
     tests/unit_lexer.cpp
     tests/unit_diag_render.cpp
     tests/unit_assembler.cpp
+    tests/unit_session.cpp
 )
-target_link_libraries(rv_tests PRIVATE rv_dbg)
+target_link_libraries(rv_tests PRIVATE rv_cmd)
 target_include_directories(rv_tests PRIVATE tests)
 rv_set_warnings(rv_tests)
 
 # One CTest entry per suite, so a failure can be re-run in isolation.
 foreach(suite fields decode roundtrip exec_alu exec_mem exec_branch exec_m csr_trap memfile
-              lexer diag_render assembler)
+              lexer diag_render assembler session)
     add_test(NAME unit.${suite} COMMAND rv_tests --filter=${suite})
 endforeach()
 
