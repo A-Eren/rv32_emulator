@@ -283,7 +283,6 @@ void EditorView::draw(Pane pane) {
     const int gutter = gutter_width();
     const int text_width = std::max(0, pane.width() - gutter);
     last_height_ = pane.height();
-    last_text_width_ = text_width;
     ensure_visible(pane.height(), text_width);
 
     const auto lines = static_cast<u32>(buffer_.line_count());

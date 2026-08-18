@@ -139,6 +139,7 @@ add_executable(rv_tests
     tests/unit_exec_mem.cpp
     tests/unit_exec_branch.cpp
     tests/unit_exec_m.cpp
+    tests/unit_exec_coverage.cpp
     tests/unit_csr_trap.cpp
     tests/unit_memfile.cpp
     tests/unit_lexer.cpp
@@ -154,7 +155,7 @@ target_include_directories(rv_tests PRIVATE tests)
 rv_set_warnings(rv_tests)
 
 # One CTest entry per suite, so a failure can be re-run in isolation.
-foreach(suite fields decode roundtrip exec_alu exec_mem exec_branch exec_m csr_trap memfile
+foreach(suite fields decode roundtrip exec_alu exec_mem exec_branch exec_m exec_coverage csr_trap memfile
               lexer diag_render assembler session render app editor)
     add_test(NAME unit.${suite} COMMAND rv_tests --filter=${suite})
 endforeach()

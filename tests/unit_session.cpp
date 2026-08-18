@@ -105,6 +105,73 @@ RV_TEST(session, finish_returns_from_the_current_function) {
     RV_CHECK_EQ(*session.current_line(), 2u);
 }
 
+RV_TEST(session, next_steps_over_a_recursive_call) {
+    // The stack-depth guard exists for exactly this. Without it, `next` would
+    // stop the first time control reached the return address -- which for a
+    // recursive function is the innermost frame, not the outermost one.
+    DebugSession session = make_session(
+        "_start: li   sp, 0x1000\n"
+        "        li   a0, 4\n"
+        "        call fact\n"
+        "        li   a2, 99\n"
+        "        ebreak\n"
+        "fact:   addi sp, sp, -8\n"
+        "        sw   ra, 0(sp)\n"
+        "        sw   a0, 4(sp)\n"
+        "        li   t0, 1\n"
+        "        ble  a0, t0, .base\n"
+        "        addi a0, a0, -1\n"
+        "        call fact\n"
+        "        lw   t1, 4(sp)\n"
+        "        mul  a0, a0, t1\n"
+        ".base:  lw   ra, 0(sp)\n"
+        "        addi sp, sp, 8\n"
+        "        ret\n");
+
+    session.step(StepKind::Line);      // li sp
+    session.step(StepKind::Line);      // li a0
+    RV_CHECK_EQ(*session.current_line(), 3u);
+
+    session.step(StepKind::LineOver);  // over the whole recursion
+    RV_CHECK_EQ(*session.current_line(), 4u);
+    RV_CHECK_HEX(reg(session, 10), 24u);     // 4! computed
+    RV_CHECK_HEX(reg(session, 2), 0x1000u);  // and the stack fully unwound
+}
+
+RV_TEST(session, finish_leaves_only_the_innermost_frame_of_a_recursion) {
+    DebugSession session = make_session(
+        "_start: li   sp, 0x1000\n"
+        "        li   a0, 3\n"
+        "        call fact\n"
+        ""
+        "        ebreak\n"
+        "fact:   addi sp, sp, -8\n"
+        "        sw   ra, 0(sp)\n"
+        "        sw   a0, 4(sp)\n"
+        "        li   t0, 1\n"
+        "        ble  a0, t0, .base\n"
+        "        addi a0, a0, -1\n"
+        "        call fact\n"
+        "        lw   t1, 4(sp)\n"
+        "        mul  a0, a0, t1\n"
+        ".base:  lw   ra, 0(sp)\n"
+        "        addi sp, sp, 8\n"
+        "        ret\n");
+
+    // Stop in the base case, at the deepest frame.
+    session.breakpoints().add_line(13, session.map());
+    RV_CHECK_EQ(static_cast<int>(session.run().reason), static_cast<int>(StopReason::Breakpoint));
+    const u32 deep_sp = reg(session, 2);
+    RV_CHECK(deep_sp < 0x1000u);  // we really are nested
+
+    session.step(StepKind::Out);
+    // One frame's worth of stack came back, not all of it: `finish` leaves the
+    // current call, not the whole recursion.
+    RV_CHECK(reg(session, 2) > deep_sp);
+    RV_CHECK(reg(session, 2) < 0x1000u);
+    RV_CHECK(!session.halted());
+}
+
 RV_TEST(session, reverse_step_restores_state_exactly) {
     // Step forward N times, step back N times, and require the machine to be
     // bit-for-bit where it started. This is the strongest possible test of the

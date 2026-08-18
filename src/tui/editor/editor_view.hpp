@@ -82,7 +82,6 @@ private:
     u32 top_ = 1;       // first visible line
     u32 left_ = 0;      // horizontal scroll, in bytes
     int last_height_ = 0;
-    int last_text_width_ = 0;
     bool modified_ = false;
 
 public:

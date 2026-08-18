@@ -214,8 +214,7 @@ std::string format_stop(const dbg::DebugSession& session, const dbg::StopEvent& 
             out << "no program loaded";
             break;
         case dbg::StopReason::HistoryHorizon:
-            out << "no further history (the ring holds "
-                << session.hart().cpu().instret << " recent steps at most)";
+            out << "no further history: this is as far back as the recording goes";
             break;
     }
     out << "\n";
