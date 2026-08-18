@@ -18,11 +18,13 @@
 #include "tui/views/encoding_view.hpp"
 #include "tui/views/panels.hpp"
 #include "tui/views/regs_view.hpp"
+#include "tui/editor/editor_view.hpp"
 #include "tui/views/source_view.hpp"
 
 namespace rv::tui {
 
 enum class AppMode : u8 {
+    Edit,    // writing assembly
     Debug,   // stepping and inspecting
     Prompt,  // typing a ':' command
     Help,    // the key overlay
@@ -30,6 +32,10 @@ enum class AppMode : u8 {
 
 struct AppOptions {
     bool numeric_registers = false;
+    /// Start in the editor rather than the debugger.
+    bool start_in_editor = false;
+    /// Where ^S writes. Empty means the file cannot be saved.
+    std::string file_path;
     /// Draw with ASCII only, for terminals that mangle box-drawing glyphs.
     bool ascii = false;
 };
@@ -59,6 +65,14 @@ public:
     /// TUI and the CLI share one implementation of every command.
     void run_command(const std::string& line);
 
+    /// Assemble what is in the editor and load it. On failure the editor keeps
+    /// the text, shows the diagnostics inline and jumps to the first error --
+    /// which is the entire point of the write-F5-debug loop.
+    bool assemble_and_load();
+    bool save();
+
+    EditorView& editor() { return editor_; }
+
 private:
     struct DockTab {
         Widget* widget = nullptr;
@@ -66,6 +80,8 @@ private:
     };
 
     void draw_status(Pane pane);
+    void draw_editor(Pane pane);
+    bool handle_edit_key(const Key& key);
     void draw_hints(Pane pane);
     void draw_message(Pane pane);
     void draw_prompt(Pane pane);
@@ -82,6 +98,7 @@ private:
     dbg::DebugSession* session_;
     AppOptions options_;
 
+    EditorView editor_;
     SourceView source_;
     RegsView registers_;
     EncodingView encoding_;
@@ -93,6 +110,8 @@ private:
     std::size_t dock_index_ = 0;
 
     AppMode mode_ = AppMode::Debug;
+    /// Where Escape returns to when leaving the prompt or the help overlay.
+    AppMode base_mode_ = AppMode::Debug;
     bool quit_ = false;
     bool run_mode_ = false;
     /// Instructions executed since the current run began. run_chunk() has no
@@ -108,6 +127,11 @@ private:
     std::string prompt_input_;
     std::vector<std::string> prompt_history_;
     std::size_t history_index_ = 0;
+
+    /// Buffer revision at the last successful assemble, so the status bar can
+    /// say whether what is on screen has been built.
+    u64 assembled_revision_ = 0;
+    std::size_t last_error_count_ = 0;
 };
 
 struct TuiOptions {

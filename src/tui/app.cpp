@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <cstdio>
 
+#include <fstream>
+
+#include "asm/diag_render.hpp"
 #include "cmd/format.hpp"
 #include "isa/disasm.hpp"
 #include "tui/string_canvas.hpp"
@@ -28,6 +31,7 @@ std::string truncate_to(const std::string& text, int width) {
 App::App(dbg::DebugSession& session, AppOptions options)
     : session_(&session),
       options_(options),
+      editor_(session),
       source_(session),
       registers_(session),
       encoding_(session),
@@ -40,6 +44,14 @@ App::App(dbg::DebugSession& session, AppOptions options)
         {&console_, '4'},   {&mmio_, '5'},   {&symbols_, '6'},
     };
     source_.follow_pc();
+    editor_.set_text(session.source().text());
+    // The session was loaded from this very text, so the buffer starts in the
+    // built state rather than claiming it has never been assembled.
+    assembled_revision_ = editor_.buffer().revision();
+    if (options_.start_in_editor) {
+        mode_ = AppMode::Edit;
+        base_mode_ = AppMode::Edit;
+    }
 }
 
 Widget& App::active_dock() { return *dock_[dock_index_].widget; }
@@ -55,8 +67,35 @@ void App::set_message(std::string text, bool is_error) {
 
 void App::draw_status(Pane pane) {
     pane.fill_all(StyleId::StatusBar);
-
     int column = 1;
+
+    if (base_mode_ == AppMode::Edit) {
+        pane.put_at(column, 0, " EDIT ", StyleId::StatusAccent);
+        ++column;
+
+        char where[128];
+        std::snprintf(where, sizeof where, "%s%s   Ln %u, Col %u",
+                      options_.file_path.empty() ? "<unsaved>" : options_.file_path.c_str(),
+                      editor_.modified() ? "*" : "", editor_.cursor().line,
+                      editor_.cursor().col + 1);
+        pane.put_at(column, 0, where, StyleId::StatusBar);
+        column += 2;
+
+        const std::size_t errors = editor_.buffer().revision() == assembled_revision_
+                                       ? last_error_count_
+                                       : 0;
+        if (editor_.buffer().revision() != assembled_revision_) {
+            pane.put_at(column, 0, "not assembled", StyleId::StatusBar);
+        } else if (errors > 0) {
+            char text[64];
+            std::snprintf(text, sizeof text, "%zu error%s", errors, errors == 1 ? "" : "s");
+            pane.put_at(column, 0, text, StyleId::StatusAccent);
+        } else {
+            pane.put_at(column, 0, "assembled", StyleId::StatusBar);
+        }
+        return;
+    }
+
     pane.put_at(column, 0, run_mode_ ? " RUNNING " : " DEBUG ", StyleId::StatusAccent);
     ++column;
 
@@ -84,10 +123,14 @@ void App::draw_status(Pane pane) {
 }
 
 void App::draw_hints(Pane pane) {
-    const char* text =
-        mode_ == AppMode::Prompt
-            ? "Enter run   Esc cancel   ↑↓ history"
-            : "F8 step  F7 si  F10 next  F5 run  F6 back  F9 bp  : cmd  ? help  q quit";
+    const char* text = nullptr;
+    if (mode_ == AppMode::Prompt) {
+        text = "Enter run   Esc cancel   ↑↓ history";
+    } else if (base_mode_ == AppMode::Edit) {
+        text = "F5 assemble+debug  ^S save  ^Z undo  F9 bp  F4 next error  ? help  ^Q quit";
+    } else {
+        text = "F8 step  F7 si  F10 next  F5 run  F6 back  F9 bp  F2 edit  : cmd  ? help  q quit";
+    }
     pane.put(0, 0, truncate_to(text, pane.width()), StyleId::Hint);
 }
 
@@ -172,6 +215,123 @@ void App::draw_too_small(Canvas& canvas) {
     if (pane.height() > 1) pane.put(0, 1, "resize, or use 'rv32 dbg' instead", StyleId::Dim);
 }
 
+void App::draw_editor(Pane pane) {
+    editor_.focused = true;
+    editor_.draw(pane);
+}
+
+bool App::assemble_and_load() {
+    as::AssembleOptions options;
+    options.explain_pseudo_sizing = false;  // the editor has no room for prose
+
+    const std::string name =
+        options_.file_path.empty() ? std::string("<editor>") : options_.file_path;
+
+    // Assemble a detached copy first, so a failed build never destroys the
+    // program that is currently loaded and steppable.
+    const as::SourceFile candidate(name, editor_.text());
+    as::AssembledProgram attempt = as::assemble(candidate, options);
+
+    editor_.set_diagnostics(attempt.diagnostics);
+    last_error_count_ = attempt.diagnostics.error_count();
+    assembled_revision_ = editor_.buffer().revision();
+
+    if (!attempt.ok()) {
+        editor_.go_to_first_error();
+        const as::Diagnostic* first = attempt.diagnostics.first_error();
+        set_message(first != nullptr ? first->message : "assembly failed", true);
+        return false;
+    }
+
+    session_->load_source(editor_.text(), name, options);
+    registers_.forget_history();
+    source_.follow_pc();
+    encoding_.follow_pc();
+
+    char text[128];
+    std::snprintf(text, sizeof text, "assembled: %zu instructions, %zu bytes of data",
+                  session_->program().imem_words.size(), session_->program().dmem_bytes.size());
+    set_message(text);
+    return true;
+}
+
+bool App::save() {
+    if (options_.file_path.empty()) {
+        set_message("no file name; this buffer cannot be saved", true);
+        return false;
+    }
+    std::ofstream file(options_.file_path, std::ios::binary);
+    if (!file) {
+        set_message("cannot write " + options_.file_path, true);
+        return false;
+    }
+    file << editor_.text();
+    if (!file) {
+        set_message("write to " + options_.file_path + " failed", true);
+        return false;
+    }
+    editor_.mark_saved();
+    set_message("saved " + options_.file_path);
+    return true;
+}
+
+bool App::handle_edit_key(const Key& key) {
+    switch (key.code) {
+        case KeyCode::F5:
+            if (assemble_and_load()) {
+                base_mode_ = AppMode::Debug;
+                mode_ = AppMode::Debug;
+            }
+            return true;
+        case KeyCode::F2:
+            base_mode_ = AppMode::Debug;
+            mode_ = AppMode::Debug;
+            return true;
+        case KeyCode::F4: {
+            // Walk to the next diagnostic, which is what you want after a
+            // failed assemble.
+            if (!editor_.go_to_first_error()) set_message("no errors");
+            return true;
+        }
+        case KeyCode::F9: {
+            const u32 line = editor_.cursor().line;
+            const bool added = session_->breakpoints().toggle_line(line, session_->map());
+            set_message(added ? "breakpoint set on line " + std::to_string(line)
+                              : "breakpoint cleared on line " + std::to_string(line));
+            return true;
+        }
+        case KeyCode::F1: mode_ = AppMode::Help; return true;
+        default: break;
+    }
+
+    if (key.ctrl && key.code == KeyCode::Char) {
+        switch (key.ch | 0x20u) {
+            case 's': save(); return true;
+            case 'q': quit_ = true; return true;
+            case 'd':
+                base_mode_ = AppMode::Debug;
+                mode_ = AppMode::Debug;
+                return true;
+            default: break;
+        }
+    }
+
+    if (editor_.on_key(key)) {
+        // The encoding panel follows the caret, so a line explains itself while
+        // it is still being written.
+        const auto& addrs = session_->map().addrs_for_line(editor_.cursor().line);
+        if (!addrs.empty()) encoding_.set_address(addrs.front());
+
+        if (const as::Diagnostic* diagnostic = editor_.diagnostic_at_cursor()) {
+            set_message(diagnostic->message, diagnostic->severity == as::Severity::Error);
+        } else {
+            message_.clear();
+        }
+        return true;
+    }
+    return false;
+}
+
 void App::draw(Canvas& canvas) {
     const Size size = canvas.size();
     if (LayoutEngine::too_small(size)) {
@@ -192,6 +352,15 @@ void App::draw(Canvas& canvas) {
         Rect body = layout.code;
         body.height = layout.dock.bottom() - layout.code.y;
         draw_help(screen.sub(body));
+    } else if (base_mode_ == AppMode::Edit) {
+        // Editing gets the body, with the dock kept so the encoding panel can
+        // follow the caret.
+        const EditLayout edit_layout = LayoutEngine::edit(size);
+        draw_editor(screen.sub(edit_layout.editor));
+        draw_message(screen.sub(edit_layout.diagnostic));
+        draw_hints(screen.sub(edit_layout.hints));
+        draw_prompt(screen.sub(edit_layout.prompt));
+        return;
     } else {
         if (!layout.code.empty()) {
             source_.focused = !dock_focused_;
@@ -260,11 +429,11 @@ void App::run_command(const std::string& line) {
 bool App::handle_prompt_key(const Key& key) {
     switch (key.code) {
         case KeyCode::Escape:
-            mode_ = AppMode::Debug;
+            mode_ = base_mode_;
             prompt_input_.clear();
             return true;
         case KeyCode::Enter: {
-            mode_ = AppMode::Debug;
+            mode_ = base_mode_;
             if (!prompt_input_.empty()) {
                 prompt_history_.push_back(prompt_input_);
                 history_index_ = prompt_history_.size();
@@ -348,6 +517,11 @@ bool App::handle_debug_key(const Key& key) {
         case KeyCode::F1:
             mode_ = AppMode::Help;
             return true;
+        case KeyCode::F2:
+            base_mode_ = AppMode::Edit;
+            mode_ = AppMode::Edit;
+            editor_.set_cursor(Pos{session_->current_line().value_or(1), 0});
+            return true;
         case KeyCode::Tab:
             dock_focused_ = !dock_focused_;
             return true;
@@ -410,11 +584,15 @@ bool App::handle_key(const Key& key) {
     if (key.code == KeyCode::Resize) return !quit_;
 
     if (mode_ == AppMode::Help) {
-        mode_ = AppMode::Debug;
+        mode_ = base_mode_;
         return !quit_;
     }
     if (mode_ == AppMode::Prompt) {
         handle_prompt_key(key);
+        return !quit_;
+    }
+    if (mode_ == AppMode::Edit) {
+        handle_edit_key(key);
         return !quit_;
     }
     handle_debug_key(key);

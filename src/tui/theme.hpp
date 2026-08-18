@@ -43,6 +43,11 @@ enum class StyleId : u8 {
     Warning,
     Note,
     Caret,
+    /// The exact text a diagnostic points at. Underlined rather than covered
+    /// with carets: in an editor the offending word has to stay readable, and
+    /// an underline costs no cells on a 24-row screen.
+    ErrorSpan,
+    WarningSpan,
 
     Count,
 };

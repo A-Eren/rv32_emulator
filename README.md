@@ -21,9 +21,9 @@ and step through what you wrote.
 | M3 | Assembler + source map | ✅ done |
 | M4 | CLI debugger | ✅ done |
 | M5 | TUI shell | ✅ done |
-| M6 | Embedded editor | 🔨 next |
-| M7 | Encoding panel, diff highlighting, reverse step | — |
-| M8 | Polish | — |
+| M6 | Embedded editor | ✅ done |
+| M7 | Encoding panel, diff highlighting, reverse step | ✅ done |
+| M8 | Polish, examples, docs | 🔨 next |
 
 ## Building
 
@@ -49,6 +49,7 @@ Presets: `debug` (warnings as errors), `asan` (+ASan/UBSan), `release`.
 ./build/debug/rv32 test tests/asm/*.s          # self-checking assembly tests
 ./build/debug/rv32 dbg examples/fib.s          # interactive debugger
 ./build/debug/rv32 tui examples/fib.s          # full-screen debugger
+./build/debug/rv32 tui examples/fib.s --edit   # ... starting in the editor
 ```
 
 The debugger steps by source line by default, so a `li` that expands to two

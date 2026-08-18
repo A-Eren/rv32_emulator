@@ -57,6 +57,8 @@ Palette make_dark() {
     set(StyleId::Warning, Style{kYellow, -1, Attr::None});
     set(StyleId::Note, Style{kCyan, -1, Attr::None});
     set(StyleId::Caret, Style{kRed, -1, Attr::Bold});
+    set(StyleId::ErrorSpan, Style{kRed, -1, Attr::Underline});
+    set(StyleId::WarningSpan, Style{kYellow, -1, Attr::Underline});
     return palette;
 }
 
@@ -83,6 +85,8 @@ Palette make_light() {
     set(StyleId::ChangedValue, Style{124, -1, Attr::Bold});
     set(StyleId::RecentValue, Style{130, -1, Attr::None});
     set(StyleId::ZeroValue, Style{247, -1, Attr::None});
+    set(StyleId::ErrorSpan, Style{124, -1, Attr::Underline});
+    set(StyleId::WarningSpan, Style{130, -1, Attr::Underline});
     return palette;
 }
 

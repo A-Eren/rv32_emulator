@@ -52,6 +52,8 @@ void print_usage() {
         "  --trace               print each instruction as it executes\n"
         "  --limit <n>           stop after n instructions (default 1000000)\n"
         "  --numeric             print x10 rather than a0\n"
+        "  --edit                open the tui in the editor rather than the debugger\n"
+        "  --render-once         draw one tui frame to stdout and exit\n"
         "  --quiet               only print the final state\n");
 }
 
@@ -71,6 +73,8 @@ struct Options {
     /// Draw one frame to stdout and exit -- the escape hatch for debugging the
     /// tui itself, since a curses application owns stdout.
     bool render_once = false;
+    /// Open in the editor rather than the debugger.
+    bool edit = false;
     std::vector<std::string> positional;
 };
 
@@ -88,6 +92,8 @@ bool parse_options(const std::vector<std::string>& args, Options& out) {
             out.pad = true;
         } else if (arg == "--annotate") {
             out.annotate = true;
+        } else if (arg == "--edit") {
+            out.edit = true;
         } else if (arg == "--render-once") {
             out.render_once = true;
         } else if (arg == "--strict-word-mem") {
@@ -401,6 +407,8 @@ int command_tui(const std::vector<std::string>& args) {
 
     tui::TuiOptions tui_options;
     tui_options.app.numeric_registers = options.numeric;
+    tui_options.app.file_path = options.positional[0];
+    tui_options.app.start_in_editor = options.edit;
     tui_options.render_once = options.render_once;
     return tui::run_tui(session, tui_options);
 }

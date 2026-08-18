@@ -109,6 +109,9 @@ add_library(rv_tui STATIC
     src/tui/views/source_view.cpp
     src/tui/views/encoding_view.cpp
     src/tui/views/panels.cpp
+    src/tui/editor/text_buffer.cpp
+    src/tui/editor/undo.cpp
+    src/tui/editor/editor_view.cpp
     src/tui/app.cpp
 )
 target_link_libraries(rv_tui PUBLIC rv_cmd PRIVATE ${CURSES_LIBRARIES})
@@ -144,6 +147,7 @@ add_executable(rv_tests
     tests/unit_session.cpp
     tests/unit_render.cpp
     tests/unit_app.cpp
+    tests/unit_editor.cpp
 )
 target_link_libraries(rv_tests PRIVATE rv_tui)
 target_include_directories(rv_tests PRIVATE tests)
@@ -151,7 +155,7 @@ rv_set_warnings(rv_tests)
 
 # One CTest entry per suite, so a failure can be re-run in isolation.
 foreach(suite fields decode roundtrip exec_alu exec_mem exec_branch exec_m csr_trap memfile
-              lexer diag_render assembler session render app)
+              lexer diag_render assembler session render app editor)
     add_test(NAME unit.${suite} COMMAND rv_tests --filter=${suite})
 endforeach()
 
