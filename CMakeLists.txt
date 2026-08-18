@@ -36,6 +36,7 @@ add_library(rv_core STATIC
     src/core/bus.cpp
     src/core/exec.cpp
     src/core/hart.cpp
+    src/core/memfile.cpp
     src/core/trap.cpp
 )
 target_link_libraries(rv_core PUBLIC rv_isa)
@@ -62,12 +63,14 @@ add_executable(rv_tests
     tests/unit_exec_mem.cpp
     tests/unit_exec_branch.cpp
     tests/unit_exec_m.cpp
+    tests/unit_csr_trap.cpp
+    tests/unit_memfile.cpp
 )
 target_link_libraries(rv_tests PRIVATE rv_core)
 target_include_directories(rv_tests PRIVATE tests)
 rv_set_warnings(rv_tests)
 
 # One CTest entry per suite, so a failure can be re-run in isolation.
-foreach(suite fields decode roundtrip exec_alu exec_mem exec_branch exec_m)
+foreach(suite fields decode roundtrip exec_alu exec_mem exec_branch exec_m csr_trap memfile)
     add_test(NAME unit.${suite} COMMAND rv_tests --filter=${suite})
 endforeach()
