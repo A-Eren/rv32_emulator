@@ -13,6 +13,7 @@
 #include "dbg/session.hpp"
 
 class QComboBox;
+class QTableWidgetItem;
 class QPushButton;
 class QSpinBox;
 class QTableWidget;
@@ -52,6 +53,7 @@ signals:
 private slots:
     void on_add();
     void on_memory_resized();
+    void on_item_changed(QTableWidgetItem* item);
     void on_remove();
     void on_selection_changed();
 
@@ -91,6 +93,9 @@ private:
     QComboBox* dmem_ = nullptr;
     std::string controls_built_;
     QString last_warning_;
+    /// Set while the panel is writing the table itself, so its own fill is not
+    /// mistaken for the user renaming something.
+    bool filling_ = false;
 };
 
 }  // namespace rv::gui

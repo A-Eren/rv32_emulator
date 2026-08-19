@@ -6,6 +6,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QDialog>
+#include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFileDialog>
@@ -126,6 +127,28 @@ void MainWindow::build_layout() {
     connect(memory_->verticalScrollBar(), &QScrollBar::valueChanged, this,
             &MainWindow::on_memory_scrolled);
 
+    // The memory tab is where memory is looked at, so it is also where memory
+    // images go in and out. A block was not even viewable before this: the
+    // table showed data memory's addresses, and a block lives in the
+    // peripheral window.
+    auto* memory_page = new QWidget(this);
+    auto* memory_layout = new QVBoxLayout(memory_page);
+    memory_layout->setContentsMargins(4, 4, 4, 4);
+    auto* memory_bar = new QHBoxLayout;
+    memory_region_ = new QComboBox(memory_page);
+    memory_region_->setFont(mono());
+    connect(memory_region_, &QComboBox::currentIndexChanged, this,
+            &MainWindow::on_memory_region_changed);
+    memory_bar->addWidget(memory_region_, 1);
+    auto* memory_load = new QPushButton("Load .mem…", memory_page);
+    auto* memory_export = new QPushButton("Export .mem…", memory_page);
+    connect(memory_load, &QPushButton::clicked, this, &MainWindow::on_memory_load);
+    connect(memory_export, &QPushButton::clicked, this, &MainWindow::on_memory_export);
+    memory_bar->addWidget(memory_load);
+    memory_bar->addWidget(memory_export);
+    memory_layout->addLayout(memory_bar);
+    memory_layout->addWidget(memory_, 1);
+
     devices_ = new DevicePanel(*session_, this);
     connect(devices_, &DevicePanel::devicesChanged, this, &MainWindow::refresh_all);
     connect(devices_, &DevicePanel::inputChanged, this, &MainWindow::refresh_all);
@@ -146,7 +169,7 @@ void MainWindow::build_layout() {
 
     dock_ = new QTabWidget(this);
     dock_->addTab(encoding_, "Encoding");
-    dock_->addTab(memory_, "Memory");
+    dock_->addTab(memory_page, "Memory");
     dock_->addTab(console_, "Console");
     dock_->addTab(devices_, "Devices");
     dock_->addTab(symbols_, "Symbols");
@@ -541,13 +564,130 @@ void MainWindow::refresh_overflow() {
     if (data_overflows && !code_overflows) set_message(reason, true);
 }
 
+void MainWindow::refresh_memory_regions() {
+    QStringList wanted;
+    QList<QVariant> keys;
+    wanted << QString("Data memory — %1 × 32-bit")
+                  .arg(session_->hart().bus().dmem().size() / 4);
+    keys << QVariant(-1);
+    for (core::Device* device : session_->hart().bus().devices()) {
+        const auto* ram = dynamic_cast<const core::RamDevice*>(device);
+        if (ram == nullptr) continue;
+        wanted << QString("%1 @ 0x%2 — %3 × 32-bit")
+                      .arg(QString::fromStdString(device->display_name()))
+                      .arg(device->base_address(), 8, 16, QLatin1Char('0'))
+                      .arg(ram->size() / 4);
+        keys << QVariant(static_cast<int>(device->slot()));
+    }
+
+    QStringList current;
+    for (int index = 0; index < memory_region_->count(); ++index) {
+        current << memory_region_->itemText(index);
+    }
+    if (current == wanted) return;
+
+    const QVariant was = memory_region_->currentData();
+    const QSignalBlocker blocker(memory_region_);
+    memory_region_->clear();
+    for (int index = 0; index < wanted.size(); ++index) {
+        memory_region_->addItem(wanted[index], keys[index]);
+    }
+    const int restored = memory_region_->findData(was);
+    memory_region_->setCurrentIndex(restored >= 0 ? restored : 0);
+    memory_rows_filled_ = -1;
+}
+
+Addr MainWindow::memory_base() const {
+    if (memory_region_ == nullptr) return 0;
+    const int slot = memory_region_->currentData().toInt();
+    if (slot < 0) return 0;
+    const core::Device* device = session_->hart().bus().device_at_slot(
+        static_cast<std::size_t>(slot));
+    return device != nullptr ? device->base_address() : 0;
+}
+
+u32 MainWindow::memory_size() const {
+    if (memory_region_ == nullptr) return session_->hart().bus().dmem().size();
+    const int slot = memory_region_->currentData().toInt();
+    if (slot < 0) return session_->hart().bus().dmem().size();
+    const auto* ram = dynamic_cast<const core::RamDevice*>(
+        session_->hart().bus().device_at_slot(static_cast<std::size_t>(slot)));
+    return ram != nullptr ? ram->size() : 0;
+}
+
+void MainWindow::on_memory_region_changed() {
+    memory_rows_filled_ = -1;
+    refresh_memory();
+}
+
+void MainWindow::on_memory_export() {
+    const QString path = QFileDialog::getSaveFileName(this, "Export memory image",
+                                                      QDir::currentPath(), "Memory image (*.mem)");
+    if (path.isEmpty()) return;
+
+    const Addr base = memory_base();
+    const u32 size = memory_size();
+    std::vector<Word> words;
+    words.reserve(size / 4);
+    for (u32 offset = 0; offset < size; offset += 4) {
+        words.push_back(session_->read_dmem_word(base + offset));
+    }
+
+    core::MemFileOptions options;
+    // Padded to the region, which is the point: the file is this memory, so it
+    // is as deep as this memory whatever is written in it.
+    options.pad_to_full = true;
+    options.full_size = size / 4;
+
+    const core::MemFileResult result = core::write_mem_file(path.toStdString(), words, options);
+    if (!result.ok) {
+        QMessageBox::warning(this, "rv32", QString::fromStdString(result.error));
+        return;
+    }
+    set_message(QString("wrote %1 — %2 × 32-bit")
+                    .arg(QFileInfo(path).fileName())
+                    .arg(size / 4));
+}
+
+void MainWindow::on_memory_load() {
+    const QString path = QFileDialog::getOpenFileName(this, "Load memory image",
+                                                      QDir::currentPath(), "Memory image (*.mem)");
+    if (path.isEmpty()) return;
+
+    std::vector<Word> words;
+    const core::MemFileResult result = core::read_mem_file(path.toStdString(), words);
+    if (!result.ok) {
+        QMessageBox::warning(this, "rv32", QString::fromStdString(result.error));
+        return;
+    }
+
+    const Addr base = memory_base();
+    const u32 size = memory_size();
+    const bool truncated = words.size() * 4 > size;
+    if (truncated) words.resize(size / 4);
+    for (std::size_t index = 0; index < words.size(); ++index) {
+        session_->hart().bus().poke_word(base + static_cast<Addr>(index * 4), words[index]);
+    }
+
+    memory_rows_filled_ = -1;
+    refresh_all();
+    set_message(truncated ? QString("%1 is longer than this memory; the rest was not read")
+                                .arg(QFileInfo(path).fileName())
+                          : QString("read %1 words from %2")
+                                .arg(words.size())
+                                .arg(QFileInfo(path).fileName()),
+                truncated);
+}
+
 void MainWindow::refresh_memory() {
     // The table is as long as the memory is. This is the whole of what the
     // dmem size means on screen: shrink it and the view stops where the
     // machine does, rather than scrolling on into addresses that read as zero
     // because nothing is there to say otherwise.
-    const u32 dmem_bytes = session_->hart().bus().dmem().size();
-    const int rows = static_cast<int>(dmem_bytes / 16);
+    refresh_memory_regions();
+    const Addr base = memory_base();
+    const u32 region_bytes = memory_size();
+    const int rows = static_cast<int>(region_bytes / 16);
     if (memory_->rowCount() != rows) {
         const QSignalBlocker resize_blocker(memory_);
         memory_->setRowCount(rows);
@@ -556,8 +696,8 @@ void MainWindow::refresh_memory() {
     if (rows == 0) return;
 
     const Addr highlight = session_->last_step().mem_written;
-    if (highlight != core::kNoAddr && highlight < dmem_bytes) {
-        memory_->scrollToItem(memory_->item(static_cast<int>(highlight / 16), 0),
+    if (highlight != core::kNoAddr && highlight >= base && highlight - base < region_bytes) {
+        memory_->scrollToItem(memory_->item(static_cast<int>((highlight - base) / 16), 0),
                               QAbstractItemView::PositionAtCenter);
     }
 
@@ -573,7 +713,7 @@ void MainWindow::refresh_memory() {
     // typing, which would write memory back to itself on every step.
     const QSignalBlocker blocker(memory_);
     for (int row = first; row <= last; ++row) {
-        const Addr address = static_cast<Addr>(row) * 16;
+        const Addr address = base + static_cast<Addr>(row) * 16;
 
         const auto set = [&](int column, const QString& text, bool editable, bool changed) {
             QTableWidgetItem* item = memory_->item(row, column);
@@ -612,7 +752,8 @@ void MainWindow::on_memory_edited(int row, int column) {
         return;
     }
 
-    const Addr address = static_cast<Addr>(row) * 16 + static_cast<Addr>((column - 1) * 4);
+    const Addr address =
+        memory_base() + static_cast<Addr>(row) * 16 + static_cast<Addr>((column - 1) * 4);
     // poke rather than store: this is the debugger writing, so it must not
     // trigger whatever a device would do on a write from the program.
     session_->hart().bus().poke_word(address, value);

@@ -581,30 +581,70 @@ RV_TEST(gui, a_block_exports_itself_at_its_own_depth) {
     QFile::remove(path);
 }
 
-RV_TEST(gui, only_a_block_gets_the_image_buttons) {
+RV_TEST(gui, a_device_can_be_renamed_after_it_exists) {
+    // What two of a kind should be called is usually clear only once both are
+    // there, so naming cannot be confined to the moment of adding.
     Fixture fixture;
     core::Bus& bus = fixture.session().hart().bus();
     bus.detach_all();
-    bus.attach(0, core::make_device("ram", 64));
-    bus.attach(4, core::make_device("switches"));
+    bus.attach(0, core::make_device("uart"));
 
     auto* panel = fixture.window.findChild<DevicePanel*>();
     panel->refresh();
     QTableWidget* list = panel->findChild<QTableWidget*>();
-    auto* controls = panel->findChild<QGroupBox*>();
+    RV_CHECK(list->item(0, 2)->flags().testFlag(Qt::ItemIsEditable));
 
-    const auto button_texts = [&] {
-        QStringList out;
-        for (QPushButton* button : controls->findChildren<QPushButton*>()) out << button->text();
-        return out;
-    };
+    list->item(0, 2)->setText("console");
+    RV_CHECK_STR(bus.device_at_slot(0)->display_name(), "console");
+    RV_CHECK_STR(list->item(0, 2)->text().toStdString(), "console  (uart)");
 
-    list->selectRow(0);
-    RV_CHECK(button_texts().contains("Export .mem…"));
-    RV_CHECK(button_texts().contains("Load .mem…"));
+    // Typing the type back, or nothing, means "no name" rather than a device
+    // deliberately named after its own kind.
+    list->item(0, 2)->setText("");
+    RV_CHECK(bus.device_at_slot(0)->label().empty());
+    RV_CHECK_STR(list->item(0, 2)->text().toStdString(), "uart");
+}
 
-    list->selectRow(1);  // switches have no image to move
-    RV_CHECK(!button_texts().contains("Export .mem…"));
+RV_TEST(gui, the_memory_tab_can_look_at_a_block_as_well_as_dmem) {
+    // Before this a block was not viewable at all: the table showed data
+    // memory's addresses and a block lives in the peripheral window.
+    Fixture fixture;
+    core::Bus& bus = fixture.session().hart().bus();
+    bus.detach_all();
+    auto* ram = static_cast<core::RamDevice*>(bus.attach(0, core::make_device("ram", 64)));
+    ram->set_label("table");
+    fixture.window.show_tab("Memory");
+    fixture.window.step_line();
+
+    QComboBox* regions = nullptr;
+    for (QComboBox* box : fixture.window.findChildren<QComboBox*>()) {
+        if (box->count() > 0 && box->itemText(0).startsWith("Data memory")) regions = box;
+    }
+    RV_CHECK(regions != nullptr);
+    if (regions == nullptr) return;
+
+    // Data memory, then the block, named and at its own address.
+    RV_CHECK_EQ(regions->count(), 2);
+    RV_CHECK_NE(regions->itemText(1).indexOf("table @ 0xffff0000"), -1);
+    RV_CHECK_NE(regions->itemText(1).indexOf("16 × 32-bit"), -1);
+}
+
+RV_TEST(gui, a_block_exports_from_the_memory_tab_at_its_own_depth) {
+    Fixture fixture;
+    core::Bus& bus = fixture.session().hart().bus();
+    bus.detach_all();
+    auto* ram = static_cast<core::RamDevice*>(bus.attach(0, core::make_device("ram", 64)));
+    ram->set_input(0, 0xdeadbeef);
+
+    // The region the view is pointed at is what gets written, so the file is
+    // as deep as that region rather than as deep as data memory.
+    fixture.window.show_tab("Memory");
+    fixture.window.step_line();
+    for (QComboBox* box : fixture.window.findChildren<QComboBox*>()) {
+        if (box->count() == 2 && box->itemText(0).startsWith("Data memory")) box->setCurrentIndex(1);
+    }
+    RV_CHECK_HEX(fixture.window.memory_size(), 64u);
+    RV_CHECK_HEX(fixture.window.memory_base(), 0xffff0000u);
 }
 
 RV_TEST(gui, a_bank_is_offered_at_the_widths_hardware_comes_in) {

@@ -38,6 +38,10 @@ QString memory_size_label(u32 bytes) {
     return QString("%1 — %2 × 32-bit").arg(amount).arg(bytes / 4);
 }
 
+/// The column holding the device's name, which is the one that can be typed
+/// into. Double-clicking it renames the device.
+constexpr int kNameColumn = 2;
+
 QFont mono(int size = 10) {
     QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
     font.setPointSize(size);
@@ -213,13 +217,17 @@ DevicePanel::DevicePanel(dbg::DebugSession& session, QWidget* parent)
     list_ = new QTableWidget(0, 4, this);
     list_->setHorizontalHeaderLabels({"slot", "address", "type", "state"});
     list_->verticalHeader()->setVisible(false);
-    list_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    list_->setEditTriggers(QAbstractItemView::DoubleClicked |
+                           QAbstractItemView::EditKeyPressed);
     list_->setSelectionBehavior(QAbstractItemView::SelectRows);
     list_->setSelectionMode(QAbstractItemView::SingleSelection);
     list_->setFont(mono());
     list_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
     connect(list_, &QTableWidget::itemSelectionChanged, this,
             &DevicePanel::on_selection_changed);
+    // Renaming after the fact, not only when adding: what two of a kind should
+    // be called is usually clear only once both are there.
+    connect(list_, &QTableWidget::itemChanged, this, &DevicePanel::on_item_changed);
     layout->addWidget(list_, 1);
 
     auto* buttons = new QHBoxLayout;
@@ -330,7 +338,32 @@ void DevicePanel::input_changed() {
     emit inputChanged();
 }
 
+void DevicePanel::on_item_changed(QTableWidgetItem* item) {
+    if (filling_ || item == nullptr || item->column() != kNameColumn) return;
+
+    const std::vector<core::Device*> devices = session_->hart().bus().devices();
+    const auto row = static_cast<std::size_t>(item->row());
+    if (row >= devices.size()) return;
+
+    // Typed empty means "no name", which puts the type back rather than
+    // leaving a device with nothing to be called.
+    QString typed = item->text().trimmed();
+    const QString type = QString::fromUtf8(devices[row]->type_name().data(),
+                                           static_cast<int>(devices[row]->type_name().size()));
+    // Tolerate the "name  (type)" the cell was showing being edited in place.
+    const int tail = typed.indexOf("  (");
+    if (tail >= 0) typed = typed.left(tail).trimmed();
+    if (typed == type) typed.clear();
+
+    devices[row]->set_label(typed.toStdString());
+    controls_built_.clear();  // the name is on screen in the controls too
+    refresh();
+    emit devicesChanged();
+}
+
 void DevicePanel::refresh_list() {
+    const QSignalBlocker blocker(list_);
+    filling_ = true;
     const std::vector<core::Device*> devices = session_->hart().bus().devices();
 
     // Keep the selection across a refresh, which happens on every step.
@@ -371,11 +404,17 @@ void DevicePanel::refresh_list() {
                 list_->setItem(row, column, item);
             }
             item->setText(cells[column]);
+            // Only the name is the person's to change; the rest is what the
+            // machine is.
+            item->setFlags(column == kNameColumn
+                               ? (Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable)
+                               : (Qt::ItemIsEnabled | Qt::ItemIsSelectable));
         }
     }
     if (selected >= 0 && selected < list_->rowCount()) list_->selectRow(selected);
     list_->resizeColumnsToContents();
     list_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    filling_ = false;
 }
 
 void DevicePanel::add_block_row(std::size_t slot) {
@@ -388,14 +427,10 @@ void DevicePanel::add_block_row(std::size_t slot) {
     line->addWidget(new QLabel(QString("%1 × 32-bit").arg(ram->size() / 4), row_widget));
     line->addStretch();
 
-    auto* load = new QPushButton("Load .mem…", row_widget);
-    auto* save = new QPushButton("Export .mem…", row_widget);
-    line->addWidget(load);
-    line->addWidget(save);
+    auto* note = new QLabel("images move in and out on the Memory tab", row_widget);
+    note->setStyleSheet("color: #7d8590;");
+    line->addWidget(note);
     controls_layout_->addWidget(row_widget);
-
-    connect(save, &QPushButton::clicked, this, [this, slot] { export_block(slot); });
-    connect(load, &QPushButton::clicked, this, [this, slot] { load_block(slot); });
 }
 
 void DevicePanel::export_block(std::size_t slot) {
