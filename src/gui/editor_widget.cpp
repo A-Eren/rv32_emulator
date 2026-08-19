@@ -6,6 +6,8 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
+
+#include <algorithm>
 #include <QScrollBar>
 #include <QStringListModel>
 #include <QTextBlock>
@@ -29,88 +31,6 @@ QColor colour_for(as::Severity severity) {
 }
 
 }  // namespace
-
-// ---------------------------------------------------------------------------
-// Hint bar
-// ---------------------------------------------------------------------------
-
-HintBar::HintBar(QWidget* parent) : QWidget(parent) {
-    QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
-    font.setPointSize(10);
-    setFont(font);
-    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-}
-
-QSize HintBar::sizeHint() const { return QSize(0, fontMetrics().height() + 6); }
-
-void HintBar::show_for(const as::Context& context) {
-    if (context.where != as::Context::Where::Operand) {
-        text_.clear();
-        form_.clear();
-        highlight_begin_ = highlight_end_ = -1;
-        update();
-        return;
-    }
-
-    const std::vector<as::OperandHint> hints = as::operand_hints(context.mnemonic);
-    if (hints.empty()) {
-        text_.clear();
-        form_.clear();
-        update();
-        return;
-    }
-
-    // Rebuild the signature here rather than calling signature_of, so the
-    // span of the operand under the caret is known while it is assembled.
-    text_ = QString::fromStdString(context.mnemonic);
-    highlight_begin_ = highlight_end_ = -1;
-    for (std::size_t index = 0; index < hints.size(); ++index) {
-        text_ += index == 0 ? " " : ", ";
-        if (index == context.operand_index) highlight_begin_ = text_.size();
-        text_ += QString::fromStdString(hints[index].name);
-        if (index == context.operand_index) highlight_end_ = text_.size();
-    }
-
-    form_ = context.operand_index < hints.size()
-                ? QString::fromStdString(hints[context.operand_index].form)
-                : QString();
-    update();
-}
-
-void HintBar::paintEvent(QPaintEvent* /*event*/) {
-    if (text_.isEmpty()) return;
-
-    QPainter painter(this);
-    painter.fillRect(rect(), QColor(0x1a, 0x1d, 0x22));
-
-    const QFontMetrics metrics(font());
-    const int baseline = (height() + metrics.ascent() - metrics.descent()) / 2;
-    int x = 6;
-
-    // The operand the caret is in is picked out; the rest is context.
-    const auto draw = [&](const QString& part, const QColor& colour, bool bold) {
-        QFont f = font();
-        f.setBold(bold);
-        painter.setFont(f);
-        painter.setPen(colour);
-        painter.drawText(x, baseline, part);
-        x += QFontMetrics(f).horizontalAdvance(part);
-    };
-
-    if (highlight_begin_ < 0) {
-        draw(text_, QColor(0x9a, 0xa2, 0xad), false);
-    } else {
-        draw(text_.left(highlight_begin_), QColor(0x6a, 0x71, 0x7c), false);
-        draw(text_.mid(highlight_begin_, highlight_end_ - highlight_begin_),
-             QColor(0xe8, 0xc0, 0x4e), true);
-        draw(text_.mid(highlight_end_), QColor(0x6a, 0x71, 0x7c), false);
-    }
-
-    if (!form_.isEmpty()) {
-        x += 12;
-        draw(form_, QColor(0x5b, 0xd6, 0xc8), false);
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Gutter
@@ -155,8 +75,8 @@ EditorWidget::EditorWidget(QWidget* parent) : QPlainTextEdit(parent), gutter_(ne
     connect(completer_, QOverload<const QString&>::of(&QCompleter::activated), this,
             &EditorWidget::insert_completion);
 
-    hint_ = new HintBar(this);
-    connect(this, &QPlainTextEdit::cursorPositionChanged, this, &EditorWidget::update_hint);
+    connect(this, &QPlainTextEdit::cursorPositionChanged, this, &EditorWidget::update_ghost);
+    connect(this, &QPlainTextEdit::textChanged, this, &EditorWidget::update_ghost);
 
     connect(this, &QPlainTextEdit::blockCountChanged, this, &EditorWidget::update_gutter_width);
     connect(this, &QPlainTextEdit::updateRequest, this, &EditorWidget::update_gutter);
@@ -189,12 +109,7 @@ void EditorWidget::update_gutter(const QRect& rect, int dy) {
 void EditorWidget::resizeEvent(QResizeEvent* event) {
     QPlainTextEdit::resizeEvent(event);
     const QRect area = contentsRect();
-    const int hint_height = hint_->sizeHint().height();
-    gutter_->setGeometry(
-        QRect(area.left(), area.top(), gutter_width(), area.height() - hint_height));
-    hint_->setGeometry(
-        QRect(area.left(), area.bottom() - hint_height + 1, area.width(), hint_height));
-    setViewportMargins(gutter_width(), 0, 0, hint_height);
+    gutter_->setGeometry(QRect(area.left(), area.top(), gutter_width(), area.height()));
 }
 
 // ---------------------------------------------------------------------------
@@ -203,12 +118,29 @@ void EditorWidget::resizeEvent(QResizeEvent* event) {
 
 QStringList EditorWidget::visible_completions() const { return completion_model_->stringList(); }
 
-void EditorWidget::update_hint() {
+void EditorWidget::update_ghost() {
     const QTextCursor cursor = textCursor();
     const QByteArray line = cursor.block().text().toUtf8();
-    hint_->show_for(as::context_at(
+    const QString ghost = QString::fromStdString(as::ghost_text(
         std::string_view(line.constData(), static_cast<std::size_t>(line.size())),
         static_cast<u16>(cursor.positionInBlock())));
+    if (ghost == ghost_) return;
+    ghost_ = ghost;
+    viewport()->update();
+}
+
+void EditorWidget::paintEvent(QPaintEvent* event) {
+    QPlainTextEdit::paintEvent(event);
+    if (ghost_.isEmpty() || !hasFocus()) return;
+
+    // Drawn straight after the caret, in the colour of something that is not
+    // there yet: it reads as the rest of the line waiting to be typed, and it
+    // shortens as the operands get written.
+    QPainter painter(viewport());
+    painter.setFont(font());
+    painter.setPen(QColor(0x55, 0x5c, 0x69));
+    const QRect caret = cursorRect();
+    painter.drawText(caret.left() + 1, caret.top() + fontMetrics().ascent(), ghost_);
 }
 
 void EditorWidget::request_completion() {
@@ -243,12 +175,26 @@ void EditorWidget::request_completion() {
 }
 
 void EditorWidget::insert_completion(const QString& text) {
+    // Accepting an instruction leaves the caret one space along, which is
+    // where its operands are: the ghost appears in the same keystroke that
+    // chose the instruction, so the suggestion runs straight into the filling
+    // in rather than stopping at the mnemonic.
+    const auto accepted = std::find_if(candidates_.begin(), candidates_.end(),
+                                       [&](const as::Completion& candidate) {
+                                           return QString::fromStdString(candidate.text) == text;
+                                       });
+    const bool takes_operands =
+        accepted != candidates_.end() &&
+        (accepted->kind == as::CompletionKind::Instruction ||
+         accepted->kind == as::CompletionKind::Pseudo) &&
+        !as::operand_hints(accepted->text).empty();
+
     QTextCursor cursor = textCursor();
     const int prefix_length = completer_->completionPrefix().length();
     cursor.setPosition(cursor.position() - prefix_length, QTextCursor::KeepAnchor);
-    cursor.insertText(text);
+    cursor.insertText(takes_operands ? text + QLatin1Char(' ') : text);
     setTextCursor(cursor);
-    update_hint();
+    update_ghost();
 }
 
 void EditorWidget::keyPressEvent(QKeyEvent* event) {

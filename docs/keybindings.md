@@ -39,14 +39,21 @@ instructions, pseudo-instructions and directives; in an operand position it
 offers only what belongs there — registers, CSR names, or the program's own
 labels.
 
-Underneath the editor, a line shows the signature of the instruction being
-written, with the operand the caret is in picked out and the values it accepts
-beside it:
+Once the instruction is chosen, the operands it still wants appear in grey
+after the caret, the way a form shows what a field is for. They are not text —
+typing goes straight through them, and each one disappears as it is filled:
 
 ```
-addi rd, rs1, imm    imm(-2048..2047)
-                ^ the caret is here
+        addi rd, rs1, imm          nothing written yet
+        addi a0, rs1, imm          rd is done
+        addi a0, a1, imm(-2048..2047)
+        addi a0, a1, 4             nothing left to say
 ```
+
+A field shows its **range** only when its name does not already answer the
+question. `rd` and `label` say everything; `imm` does not tell you that 5000
+will be rejected, so it shows `imm(-2048..2047)` while it is the field being
+asked for.
 
 Both come from `instr_table.def`, the same rows the assembler encodes with, so
 a hint cannot promise something F5 will refuse.
@@ -54,7 +61,7 @@ a hint cannot promise something F5 will refuse.
 | Key | What it does |
 |---|---|
 | `Ctrl+Space` | Offer completions here |
-| `Enter` / `Tab` | Accept the highlighted one |
+| `Enter` / `Tab` | Accept the highlighted one, leaving the caret at its operands |
 | `Esc` | Dismiss the list |
 
 ## Editing

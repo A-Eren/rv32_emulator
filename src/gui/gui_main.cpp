@@ -103,6 +103,7 @@ int main(int argc, char** argv) {
             cursor.movePosition(QTextCursor::Right, QTextCursor::MoveAnchor,
                                 parts.value(1, "0").toInt());
             window.editor().setTextCursor(cursor);
+            window.editor().setFocus();
         }
         QCoreApplication::processEvents();
         return window.grab().save(parser.value(screenshot)) ? 0 : 1;

@@ -236,3 +236,60 @@ RV_TEST(complete, an_unknown_mnemonic_offers_nothing_for_its_operands) {
     const std::vector<Completion> items = complete("    frobnicate a", 16);
     RV_CHECK(items.empty() || !contains(texts(items), "add"));
 }
+
+// ---------------------------------------------------------------------------
+// Ghost text
+// ---------------------------------------------------------------------------
+
+RV_TEST(complete, the_ghost_is_the_operands_not_yet_written) {
+    const auto ghost = [](const std::string& line) {
+        return as::ghost_text(line, static_cast<u16>(line.size()));
+    };
+
+    RV_CHECK_STR(ghost("        addi "), "rd, rs1, imm");
+    RV_CHECK_STR(ghost("        addi a0, "), "rs1, imm");
+    RV_CHECK_STR(ghost("        addi a0, a1, "), "imm(-2048..2047)");
+    RV_CHECK_STR(ghost("        addi a0, a1, 4"), "");
+}
+
+RV_TEST(complete, a_field_being_typed_is_left_alone) {
+    // Half a register written: finishing it belongs to the writer, so the
+    // ghost picks up at the comma to the next field.
+    RV_CHECK_STR(as::ghost_text("        addi a0", 15), ", rs1, imm");
+    RV_CHECK_STR(as::ghost_text("        addi a", 14), ", rs1, imm");
+}
+
+RV_TEST(complete, an_open_paren_counts_as_a_field_under_way) {
+    // No word under the caret, but `4(` is plainly mid-operand -- offering
+    // `offset(base)` here would suggest starting over.
+    RV_CHECK_STR(as::ghost_text("        lw a0, 4(", 17), "");
+}
+
+RV_TEST(complete, the_ghost_stays_out_of_the_way_of_real_text) {
+    // The ghost is painted after the caret. Anything already out there wins.
+    RV_CHECK_STR(as::ghost_text("        addi a0, a1, 4", 12), "");
+    RV_CHECK_STR(as::ghost_text("        addi  # add one", 13), "");
+}
+
+RV_TEST(complete, the_ghost_is_silent_while_the_mnemonic_is_being_written) {
+    // That half of the job belongs to the completion list.
+    RV_CHECK_STR(as::ghost_text("        ad", 10), "");
+    RV_CHECK_STR(as::ghost_text("        ", 8), "");
+}
+
+RV_TEST(complete, a_field_shows_its_range_only_when_the_name_does_not_say_it) {
+    // "imm" does not tell you 5000 will be rejected; "rd" and "label" are
+    // already the whole answer.
+    RV_CHECK_STR(as::ghost_text("        slli a0, a1, ", 21), "imm(0..31)");
+    RV_CHECK_STR(as::ghost_text("        lui a0, ", 16), "imm(0..0xfffff)");
+    RV_CHECK_STR(as::ghost_text("        jal ", 12), "rd, label");
+    RV_CHECK_STR(as::ghost_text("        sw a0, ", 15), "offset(base)");
+}
+
+RV_TEST(complete, a_comma_with_no_space_still_reads_as_text) {
+    RV_CHECK_STR(as::ghost_text("        addi a0,", 16), " rs1, imm");
+}
+
+RV_TEST(complete, an_unknown_mnemonic_has_no_ghost) {
+    RV_CHECK_STR(as::ghost_text("        frobnicate ", 19), "");
+}

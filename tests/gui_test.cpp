@@ -374,24 +374,60 @@ RV_TEST(gui, typing_ad_offers_add_and_addi_in_the_editor) {
     RV_CHECK(!offered.contains("sub"));
 }
 
-RV_TEST(gui, the_hint_bar_names_the_operand_the_caret_is_in) {
-    // The second half of the request: once an instruction is chosen, the
-    // operand shapes appear.
+RV_TEST(gui, the_operands_still_to_write_are_greyed_in_after_the_caret) {
     Fixture fixture;
-    const auto hint_after = [&](const char* line) {
-        fixture.editor().setPlainText(line);
+    fixture.editor().setPlainText("");
+
+    const auto ghost_after = [&](const char* line) {
+        fixture.editor().setPlainText(QString::fromLatin1(line));
         QTextCursor cursor = fixture.editor().textCursor();
         cursor.movePosition(QTextCursor::End);
         fixture.editor().setTextCursor(cursor);
-        return fixture.editor().hint_bar()->text();
+        return fixture.editor().ghost_text().toStdString();
     };
 
-    RV_CHECK_STR(hint_after("        addi ").toStdString(), "addi rd, rs1, imm");
-    RV_CHECK_STR(hint_after("        lw ").toStdString(), "lw rd, offset(base)");
-    RV_CHECK_STR(hint_after("        beq a0, a1, ").toStdString(), "beq rs1, rs2, label");
+    // An empty field asks for itself; the ones behind it wait their turn.
+    RV_CHECK_STR(ghost_after("        addi "), "rd, rs1, imm");
+    RV_CHECK_STR(ghost_after("        addi a0, "), "rs1, imm");
+    RV_CHECK_STR(ghost_after("        addi a0, a1, "), "imm(-2048..2047)");
+    // Filled in -- nothing left to say.
+    RV_CHECK_STR(ghost_after("        addi a0, a1, 4"), "");
 
-    // Nothing to say while the mnemonic itself is still being typed.
-    RV_CHECK(hint_after("        ad").isEmpty());
+    // A field being typed is left alone; the comma to the next one is offered.
+    RV_CHECK_STR(ghost_after("        addi a0"), ", rs1, imm");
+
+    RV_CHECK_STR(ghost_after("        lw a0, "), "offset(base)");
+    RV_CHECK_STR(ghost_after("        beq a0, a1, "), "label");
+
+    // Not while the mnemonic itself is still being written -- that is the
+    // completion popup's half of the job.
+    RV_CHECK_STR(ghost_after("        ad"), "");
+}
+
+RV_TEST(gui, the_ghost_keeps_out_of_the_way_of_real_text) {
+    Fixture fixture;
+    fixture.editor().setPlainText("        addi a0, a1, 4");
+
+    // Caret parked after `addi`, with operands already written past it. The
+    // ghost would be drawn straight over them, so there is none.
+    QTextCursor cursor = fixture.editor().textCursor();
+    cursor.setPosition(fixture.editor().document()->firstBlock().position() + 12);
+    fixture.editor().setTextCursor(cursor);
+    RV_CHECK_STR(fixture.editor().ghost_text().toStdString(), "");
+}
+
+RV_TEST(gui, accepting_an_instruction_leaves_the_caret_at_its_operands) {
+    Fixture fixture;
+    fixture.editor().setPlainText("        addi");
+    QTextCursor cursor = fixture.editor().textCursor();
+    cursor.movePosition(QTextCursor::End);
+    fixture.editor().setTextCursor(cursor);
+
+    fixture.editor().request_completion();
+    fixture.editor().insert_completion("addi");
+
+    RV_CHECK_STR(fixture.editor().toPlainText().toStdString(), "        addi ");
+    RV_CHECK_STR(fixture.editor().ghost_text().toStdString(), "rd, rs1, imm");
 }
 
 RV_TEST(gui, completion_offers_registers_where_a_register_belongs) {

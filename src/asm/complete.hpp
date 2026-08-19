@@ -76,9 +76,22 @@ struct Context {
     std::string mnemonic;
     /// Which operand the caret is in, counting from zero.
     std::size_t operand_index = 0;
+    /// Byte offset where that operand's text begins -- just past the comma
+    /// that opened it, or past the mnemonic for the first one. What lies
+    /// between here and the caret is how much of the field is already written.
+    u16 field_begin = 0;
 };
 
 Context context_at(std::string_view line, u16 column);
+
+/// The operands still to be written, as the editor greys them in after the
+/// caret: `addi a0, ` -> `rs1, imm`. Empty when there is nothing to fill in,
+/// or when real text follows the caret and the ghost would collide with it.
+///
+/// The field being asked for shows its range when the name alone does not say
+/// what fits -- `imm` becomes `imm(-2048..2047)`, while `rd` is already the
+/// whole answer.
+std::string ghost_text(std::string_view line, u16 column);
 
 /// Candidates for the caret's position, best match first. `symbols` may be
 /// null, in which case labels are not offered.

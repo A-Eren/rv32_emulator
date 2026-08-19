@@ -1,6 +1,7 @@
 #include "asm/complete.hpp"
 
 #include <algorithm>
+#include <cctype>
 
 #include "asm/directive.hpp"
 #include "asm/lexer.hpp"
@@ -90,6 +91,13 @@ bool matches(std::string_view candidate, std::string_view prefix) {
     return true;
 }
 
+/// What an empty field shows. The name is enough when it already says what
+/// goes there (`rd`, `label`, `offset(base)`); an immediate is not -- "imm"
+/// does not tell you that 5000 will be rejected, and its range does.
+std::string_view placeholder_of(const OperandHint& hint) {
+    return starts_with(hint.form, "imm(") ? hint.form : hint.name;
+}
+
 bool is_word_char(char c) {
     return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_' || c == '.' || c == '$';
 }
@@ -147,6 +155,7 @@ Context context_at(std::string_view line, u16 column) {
     std::size_t commas = 0;
     std::string mnemonic;
     u16 mnemonic_end = 0;
+    u16 field_begin = 0;
     bool seen_statement = false;
 
     for (const Token& token : tokens) {
@@ -171,11 +180,15 @@ Context context_at(std::string_view line, u16 column) {
             if (token.kind == TokenKind::Ident || token.kind == TokenKind::Directive) {
                 mnemonic = std::string(token.text);
                 mnemonic_end = token.span.end_col();
+                field_begin = mnemonic_end;
                 seen_statement = true;
             }
             continue;
         }
-        if (token.kind == TokenKind::Comma) ++commas;
+        if (token.kind == TokenKind::Comma) {
+            ++commas;
+            field_begin = token.span.end_col();
+        }
     }
 
     // Still inside the leading word. Compared by position rather than by
@@ -189,7 +202,51 @@ Context context_at(std::string_view line, u16 column) {
     context.where = Context::Where::Operand;
     context.mnemonic = mnemonic;
     context.operand_index = commas;
+    context.field_begin = field_begin;
     return context;
+}
+
+std::string ghost_text(std::string_view line, u16 column) {
+    column = static_cast<u16>(std::min<std::size_t>(column, line.size()));
+
+    // The ghost is painted in the space after the caret, so it may only appear
+    // when that space is empty. Anything real out there wins.
+    for (const char c : line.substr(column)) {
+        if (std::isspace(static_cast<unsigned char>(c)) == 0) return {};
+    }
+
+    const Context context = context_at(line, column);
+    if (context.where != Context::Where::Operand) return {};
+    const std::vector<OperandHint> hints = operand_hints(context.mnemonic);
+    if (hints.empty()) return {};
+
+    // Is this field already being written? Not the same question as "is there
+    // a word under the caret": after `lw a0, 4(` the field is well under way
+    // with no word in progress.
+    bool started = false;
+    for (std::size_t index = context.field_begin; index < column; ++index) {
+        if (std::isspace(static_cast<unsigned char>(line[index])) == 0) {
+            started = true;
+            break;
+        }
+    }
+
+    // A started field is finished by the writer, not by us; the ghost picks up
+    // at the next one and carries the comma that separates them.
+    const std::size_t first = context.operand_index + (started ? 1 : 0);
+    if (first >= hints.size()) return {};
+
+    std::string out;
+    if (started) {
+        out += ", ";
+    } else if (column > 0 && std::isspace(static_cast<unsigned char>(line[column - 1])) == 0) {
+        out += ' ';  // `addi a0,` -- keep the ghost from touching the comma
+    }
+    for (std::size_t index = first; index < hints.size(); ++index) {
+        if (index != first) out += ", ";
+        out += index == first ? placeholder_of(hints[index]) : std::string_view(hints[index].name);
+    }
+    return out;
 }
 
 // ---------------------------------------------------------------------------
