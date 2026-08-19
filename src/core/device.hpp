@@ -26,9 +26,13 @@
 namespace rv::core {
 
 inline constexpr Addr kMmioBase = 0xffff'0000u;
-inline constexpr std::size_t kMmioSlots = 16;
-/// Bytes of address space per slot.
+/// Bytes of address space per slot. Sixteen is enough for any register-shaped
+/// device; a memory block simply takes several.
 inline constexpr u32 kSlotSize = 16;
+/// 64 slots, so the window is a kilobyte. Sixteen slots would have been enough
+/// for registers, but a memory block is a peripheral here, and 256 bytes of
+/// window leaves no room for a lookup table worth having.
+inline constexpr std::size_t kMmioSlots = 64;
 inline constexpr u32 kMmioSize = kMmioSlots * kSlotSize;
 
 constexpr Addr slot_address(std::size_t slot) {

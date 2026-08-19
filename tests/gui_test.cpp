@@ -11,6 +11,8 @@
 #include <QListWidget>
 #include <QTableWidget>
 
+#include "core/device_config.hpp"
+#include "gui/device_panel.hpp"
 #include "gui/editor_widget.hpp"
 #include "gui/encoding_widget.hpp"
 #include "asm/lexer.hpp"
@@ -275,6 +277,85 @@ RV_TEST(gui, interrupts_are_visible_in_the_io_panel) {
 
     RV_CHECK(fixture.session().hart().bus().timer()->armed());
     RV_CHECK_HEX(fixture.session().hart().bus().timer()->compare(), 50u);
+}
+
+RV_TEST(gui, the_device_panel_lists_what_is_attached) {
+    Fixture fixture;
+    auto* panel = fixture.window.findChild<DevicePanel*>();
+    RV_CHECK(panel != nullptr);
+
+    auto* list = panel->findChild<QTableWidget*>();
+    RV_CHECK(list != nullptr);
+    RV_CHECK_EQ(list->rowCount(),
+                static_cast<int>(fixture.session().hart().bus().devices().size()));
+
+    // The address is what a program needs, so it is in the table rather than
+    // left to be worked out from the slot.
+    bool found_uart = false;
+    for (int row = 0; row < list->rowCount(); ++row) {
+        if (list->item(row, 2)->text() == "uart") {
+            found_uart = true;
+            RV_CHECK_STR(list->item(row, 1)->text().toStdString(), "0xffff0000");
+        }
+    }
+    RV_CHECK(found_uart);
+}
+
+RV_TEST(gui, adding_and_removing_a_peripheral_updates_the_machine) {
+    Fixture fixture;
+    core::Bus& bus = fixture.session().hart().bus();
+    const std::size_t before = bus.devices().size();
+
+    bus.attach(9, core::make_device("button"));
+    RV_CHECK_EQ(bus.devices().size(), before + 1);
+    RV_CHECK(bus.device_at_slot(9) != nullptr);
+
+    // The panel picks it up on the next refresh, which every step triggers.
+    fixture.window.step_line();
+    auto* list = fixture.window.findChild<DevicePanel*>()->findChild<QTableWidget*>();
+    RV_CHECK_EQ(list->rowCount(), static_cast<int>(before + 1));
+
+    bus.detach(9);
+    fixture.window.step_line();
+    RV_CHECK_EQ(list->rowCount(), static_cast<int>(before));
+}
+
+RV_TEST(gui, memory_can_be_edited_by_hand) {
+    // Typing a value into the memory table writes it, using the debugger's
+    // path rather than the program's -- so editing a device register does not
+    // trigger whatever a write from the program would do.
+    Fixture fixture;
+    auto* table = fixture.window.findChild<QTableWidget*>("");
+    // The memory table is the one with an "address" header.
+    QTableWidget* memory = nullptr;
+    for (QTableWidget* candidate : fixture.window.findChildren<QTableWidget*>()) {
+        if (candidate->columnCount() == 5 &&
+            candidate->horizontalHeaderItem(0)->text() == "address") {
+            memory = candidate;
+        }
+    }
+    (void)table;
+    RV_CHECK(memory != nullptr);
+    if (memory == nullptr) return;
+
+    RV_CHECK_HEX(fixture.session().read_dmem_word(0x10), 0u);
+    memory->item(1, 1)->setText("deadbeef");  // row 1 is address 0x10, column 1 is +0
+    RV_CHECK_HEX(fixture.session().read_dmem_word(0x10), 0xdeadbeefu);
+}
+
+RV_TEST(gui, a_device_configuration_round_trips_through_the_panel) {
+    Fixture fixture;
+    core::Bus& bus = fixture.session().hart().bus();
+    bus.switches()->set_value(0x1234);
+
+    const core::DeviceConfig described = core::describe(bus);
+    const std::string text = core::write_device_config(described);
+    RV_CHECK_NE(text.find("[[device]]"), std::string::npos);
+    RV_CHECK_NE(text.find("\"switches\""), std::string::npos);
+
+    const core::DeviceConfig reparsed = core::parse_device_config(text, "t.toml");
+    RV_CHECK(reparsed.ok());
+    RV_CHECK_EQ(reparsed.devices.size(), described.devices.size());
 }
 
 RV_TEST(gui, syntax_roles_come_from_the_assemblers_own_tables) {

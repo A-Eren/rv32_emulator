@@ -103,6 +103,7 @@ if(Qt6_FOUND)
     add_executable(rv32-gui
         src/gui/gui_main.cpp
         src/gui/main_window.cpp
+        src/gui/device_panel.cpp
         src/gui/editor_widget.cpp
         src/gui/encoding_widget.cpp
         src/gui/highlighter.cpp
@@ -117,6 +118,7 @@ if(Qt6_FOUND)
     add_executable(rv_gui_tests
         tests/gui_test.cpp
         src/gui/main_window.cpp
+        src/gui/device_panel.cpp
         src/gui/editor_widget.cpp
         src/gui/encoding_widget.cpp
         src/gui/highlighter.cpp

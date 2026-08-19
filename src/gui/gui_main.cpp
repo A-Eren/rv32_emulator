@@ -63,8 +63,10 @@ int main(int argc, char** argv) {
     // the layout without a display.
     QCommandLineOption screenshot("screenshot", "render one frame to <file> and exit", "file");
     QCommandLineOption steps("steps", "step this many lines before rendering", "n", "0");
+    QCommandLineOption tab("tab", "select a dock tab before rendering", "name");
     parser.addOption(screenshot);
     parser.addOption(steps);
+    parser.addOption(tab);
     parser.process(app);
 
     rv::gui::MainWindow window;
@@ -89,6 +91,7 @@ int main(int argc, char** argv) {
 
     if (parser.isSet(screenshot)) {
         for (int i = 0, n = parser.value(steps).toInt(); i < n; ++i) window.step_line();
+        if (parser.isSet(tab)) window.show_tab(parser.value(tab));
         QCoreApplication::processEvents();
         return window.grab().save(parser.value(screenshot)) ? 0 : 1;
     }

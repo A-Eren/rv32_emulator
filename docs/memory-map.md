@@ -23,25 +23,86 @@ no self-modifying code on this machine.
 Exported as `dmem.mem`. Address 0 here is a *different location* from address 0
 in IMEM.
 
-## Memory-mapped I/O
+## Peripherals
 
-Sixteen slots of sixteen bytes at `0xFFFF0000`–`0xFFFF00FF`, dispatched by
-`(addr >> 4) & 0xF`.
+A one-kilobyte window at `0xFFFF0000`–`0xFFFF03FF`, divided into 64 slots of 16
+bytes. Devices are attached to slots at runtime rather than being fixed, so a
+machine can be given the peripherals an exercise needs.
 
-| Address | Access | Meaning |
+An address in the window with nothing attached **faults**. Reading as zero
+would let a program touch a peripheral that is not there and never find out.
+
+The default machine, if nothing says otherwise:
+
+| Slot | Address | Type | |
+|---|---|---|---|
+| 0 | `0xFFFF0000` | `uart` | `+0` W transmit a byte; `+4` R status, bit 0 = ready |
+| 1 | `0xFFFF0010` | `leds` | 32-bit output register |
+| 2 | `0xFFFF0020` | `switches` | 32-bit input register |
+| 3 | `0xFFFF0030` | `mtime` | cycle counter, low and high words |
+| 4 | `0xFFFF0040` | `mtimecmp` | timer compare; an interrupt is pending while `mtime >= mtimecmp` |
+| 5 | `0xFFFF0050` | `irq` | `+0` software request, `+4` external request |
+
+And the types that can be added:
+
+| Type | | |
 |---|---|---|
-| `0xFFFF0000` | W | UART transmit — the low byte is appended to the console |
-| `0xFFFF0004` | R | UART status; bit 0 = transmitter ready (always 1) |
-| `0xFFFF0010` | RW | LED output register, 32 bits |
-| `0xFFFF0020` | R | Switch input register, 32 bits (writes ignored) |
-| `0xFFFF0030` | R | Cycle counter, low word — this is also `mtime` |
-| `0xFFFF0034` | R | Cycle counter, high word |
-| `0xFFFF0040` | RW | `mtimecmp`: a timer interrupt is pending while `mtime >= mtimecmp`. Resets disarmed (`0xFFFFFFFF`) |
-| `0xFFFF0050` | RW | Software interrupt request, bit 0 |
-| `0xFFFF0054` | RW | External interrupt request, bit 0 |
+| `button` | momentary input; raises the external interrupt line while held |
+| `value` | a number the user types in, standing in for a sensor or an ADC |
+| `display` | 7-segment digits, one byte each |
+| `ram` | a memory block, `size` bytes, optionally preloaded with `load` |
+| `rom` | the same, but stores from the program are ignored |
+
+A memory block takes as many slots as its size needs, so a 128-byte block
+occupies eight.
+
+### Describing a machine
+
+`examples/board.toml` is a worked example. The format is a deliberate subset of
+TOML — arrays of tables with scalar keys — parsed in about a hundred lines
+rather than taken as a dependency:
+
+```toml
+[[device]]
+type = "switches"
+slot = 2
+value = 0b1010          # a starting position
+
+[[device]]
+type = "rom"
+slot = 9
+size = 256
+load = "sine_table.mem" # resolved relative to this file
+```
+
+Understood keys: `type`, `slot`, `size`, `value`, `load`, `readonly`, `digits`.
+Anything else is an error naming the line and listing what was expected.
+
+Applying a configuration **replaces** the devices rather than adding to them, so
+a file describes a machine reproducibly. `File → Save peripherals` writes the
+current set back out.
+
+### Editing and undoing
+
+Every device implements a side-effect-free `peek`/`poke` pair, and three things
+follow from that:
+
+- The memory view shows a peripheral's registers rather than a hole, and they
+  can be edited by typing into it.
+- A ROM can be edited that way even though a program cannot write it. Being
+  unable to would be an obstacle, not a safeguard — the assembler is where a
+  write to read-only memory should be caught.
+- Reverse stepping undoes a write to any device with no per-device history at
+  all: the debugger's ordinary one-word memory delta plus `poke` covers it. Only
+  the UART needs more, since a growing output string is not a register, and its
+  length rides in a single extra word.
+
+Peeking cannot consume anything, which matters because a memory view redraws
+constantly — merely looking at the machine must not change it.
 
 Switch inputs survive a reset, since physical switches on a board do not move
-when the core is reset.
+when the core is reset. A preloaded memory block survives one too: a lookup
+table has to still be there after the machine restarts.
 
 ### Time is the cycle counter
 
