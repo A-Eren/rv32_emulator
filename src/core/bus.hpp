@@ -56,6 +56,19 @@ public:
     /// Attach the devices a machine has unless told otherwise.
     void attach_default_devices();
 
+    // Cached pointers to the devices the rest of the machine asks for by name.
+    // All nullable: a configuration with no timer, or no UART, is legitimate,
+    // and callers have to say what happens then rather than assuming.
+    UartDevice* uart() const { return uart_; }
+    LedDevice* leds() const { return leds_; }
+    SwitchDevice* switches() const { return switches_; }
+    CycleDevice* cycles() const { return cycles_; }
+    TimerDevice* timer() const { return timer_; }
+    IrqDevice* irq() const { return irq_; }
+
+    /// Whatever the UART has printed, or an empty string if there is no UART.
+    const std::string& uart_output() const;
+
     // ---- access ------------------------------------------------------------
 
     static bool is_mmio(Addr addr) { return addr >= kMmioBase && addr - kMmioBase < kMmioSize; }
@@ -82,9 +95,18 @@ public:
     void reset();
 
 private:
+    void refresh_cache();
+
     Memory dmem_;
     std::vector<std::unique_ptr<Device>> owned_;
     std::array<Device*, kMmioSlots> slots_{};
+
+    UartDevice* uart_ = nullptr;
+    LedDevice* leds_ = nullptr;
+    SwitchDevice* switches_ = nullptr;
+    CycleDevice* cycles_ = nullptr;
+    TimerDevice* timer_ = nullptr;
+    IrqDevice* irq_ = nullptr;
 };
 
 }  // namespace rv::core

@@ -487,12 +487,12 @@ void MainWindow::refresh_io() {
     const auto flag = [](u32 mask, u32 bits) { return (bits & mask) != 0 ? "1" : "."; };
 
     QString text;
-    text += QString::asprintf("leds       0xffff0010  %08x\n", bus.leds().value());
-    text += QString::asprintf("switches   0xffff0020  %08x\n", bus.switches().value());
+    text += QString::asprintf("leds       0xffff0010  %08x\n", bus.leds()->value());
+    text += QString::asprintf("switches   0xffff0020  %08x\n", bus.switches()->value());
     text += QString::asprintf("mtime      0xffff0030  %08x   the cycle counter\n",
                               static_cast<u32>(session_->cpu().cycle));
-    text += QString::asprintf("mtimecmp   0xffff0040  %08x   %s\n", bus.timer().compare(),
-                              bus.timer().armed() ? "armed" : "disarmed");
+    text += QString::asprintf("mtimecmp   0xffff0040  %08x   %s\n", bus.timer()->compare(),
+                              bus.timer()->armed() ? "armed" : "disarmed");
     text += QString::asprintf("uart       0xffff0000  %8zu   bytes written\n\n",
                               session_->uart_output().size());
     text += QString::asprintf("irq  pending ext=%s sw=%s timer=%s\n",
@@ -504,7 +504,7 @@ void MainWindow::refresh_io() {
 
     QString bits;
     for (int index = 31; index >= 0; --index) {
-        bits += ((bus.leds().value() >> index) & 1u) != 0 ? '#' : '.';
+        bits += ((bus.leds()->value() >> index) & 1u) != 0 ? '#' : '.';
     }
     text += "\nleds  " + bits + "\n";
     io_->setPlainText(text);

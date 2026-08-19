@@ -273,8 +273,8 @@ RV_TEST(gui, interrupts_are_visible_in_the_io_panel) {
         "        ebreak\n");
     for (int i = 0; i < 3; ++i) fixture.window.step_line();
 
-    RV_CHECK(fixture.session().hart().bus().timer().armed());
-    RV_CHECK_HEX(fixture.session().hart().bus().timer().compare(), 50u);
+    RV_CHECK(fixture.session().hart().bus().timer()->armed());
+    RV_CHECK_HEX(fixture.session().hart().bus().timer()->compare(), 50u);
 }
 
 RV_TEST(gui, syntax_roles_come_from_the_assemblers_own_tables) {

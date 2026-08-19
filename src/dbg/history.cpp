@@ -18,7 +18,10 @@ void StepHistory::record(const core::StepOutcome& outcome, const core::Hart& /*h
     delta.mem_width = outcome.mem_width;
     delta.cycle_before = outcome.cycle_before;
     delta.instret_before = outcome.instret_before;
-    delta.devices_before = outcome.devices_before;
+    delta.device_slot = outcome.device_slot == core::StepOutcome::kNoDevice
+                            ? StepDelta::kNoDevice
+                            : static_cast<u32>(outcome.device_slot);
+    delta.device_aux_before = outcome.device_aux_before;
 
     if (outcome.touched_many_csrs) {
         // The pre-step copy, not the current one: the whole point is to undo
@@ -57,10 +60,14 @@ bool StepHistory::undo(core::Hart& hart) {
         hart.bus().poke_word(delta.mem_addr, delta.mem_before);
     }
 
-    hart.bus().restore(delta.devices_before);
+    if (delta.device_slot != StepDelta::kNoDevice) {
+        if (core::Device* device = hart.bus().device_at_slot(delta.device_slot)) {
+            device->set_aux_state(delta.device_aux_before);
+        }
+    }
     cpu.cycle = delta.cycle_before;
     cpu.instret = delta.instret_before;
-    hart.bus().cycles().set_cycles(cpu.cycle);
+    if (core::CycleDevice* clock = hart.bus().cycles()) clock->set_cycles(cpu.cycle);
 
     // Stepping back out of a halt makes the machine runnable again.
     hart.clear_halt();

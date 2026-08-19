@@ -122,7 +122,7 @@ RV_TEST(exec_mem, uart_writes_reach_the_console) {
         EBREAK(),
     });
     m.run();
-    RV_CHECK_STR(m.hart().bus().uart().output(), "hi");
+    RV_CHECK_STR(m.hart().bus().uart_output(), "hi");
 }
 
 RV_TEST(exec_mem, led_register_round_trips) {
@@ -135,7 +135,7 @@ RV_TEST(exec_mem, led_register_round_trips) {
         EBREAK(),
     });
     m.run();
-    RV_CHECK_HEX(m.hart().bus().leds().value(), 0x2au);
+    RV_CHECK_HEX(m.hart().bus().leds()->value(), 0x2au);
     RV_CHECK_HEX(m.reg(3), 0x2au);
 }
 

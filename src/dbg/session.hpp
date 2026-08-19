@@ -122,7 +122,7 @@ public:
     const std::vector<RegChange>& last_changes() const { return last_changes_; }
     const core::StepOutcome& last_step() const { return last_step_; }
 
-    const std::string& uart_output() const { return hart_.bus().uart().output(); }
+    const std::string& uart_output() const { return hart_.bus().uart_output(); }
 
     u32 read_imem_word(Addr addr) const { return hart_.imem().read_word_raw(addr); }
     u32 read_dmem_word(Addr addr) const { return hart_.bus().peek_word(addr); }
