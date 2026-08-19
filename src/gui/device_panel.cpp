@@ -145,6 +145,38 @@ DevicePanel::DevicePanel(dbg::DebugSession& session, QWidget* parent)
 }
 
 void DevicePanel::refresh() {
+    refresh_list();
+
+    // Only when what the controls were built from has actually changed. A
+    // rebuild deletes every control widget, so doing it on every step would
+    // tear down whatever the user is in the middle of operating.
+    if (controls_signature() != controls_built_) rebuild_controls();
+}
+
+std::string DevicePanel::controls_signature() const {
+    const std::vector<core::Device*> devices = session_->hart().bus().devices();
+    const int row = list_->currentRow();
+    std::string out = std::to_string(row) + "/" + std::to_string(devices.size());
+    if (row >= 0 && row < static_cast<int>(devices.size())) {
+        const core::Device* device = devices[static_cast<std::size_t>(row)];
+        out += ":" + std::to_string(device->slot());
+        for (const core::InputControl& control : device->inputs()) {
+            out += "," + std::to_string(control.value);
+        }
+    }
+    return out;
+}
+
+void DevicePanel::input_changed() {
+    // The control already shows the new value -- it is the thing that set it.
+    // Recording the signature here is what stops the next refresh from
+    // rebuilding on top of it.
+    controls_built_ = controls_signature();
+    refresh_list();
+    emit inputChanged();
+}
+
+void DevicePanel::refresh_list() {
     const std::vector<core::Device*> devices = session_->hart().bus().devices();
 
     // Keep the selection across a refresh, which happens on every step.
@@ -172,8 +204,6 @@ void DevicePanel::refresh() {
     if (selected >= 0 && selected < list_->rowCount()) list_->selectRow(selected);
     list_->resizeColumnsToContents();
     list_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
-
-    rebuild_controls();
 }
 
 void DevicePanel::on_selection_changed() {
@@ -182,8 +212,17 @@ void DevicePanel::on_selection_changed() {
 }
 
 void DevicePanel::rebuild_controls() {
+    controls_built_ = controls_signature();
+
+    // deleteLater, and out of the tree first: a rebuild may still be reached
+    // from inside a control's own signal, and destroying the sender under it
+    // is a use-after-free rather than a redraw.
     while (QLayoutItem* item = controls_layout_->takeAt(0)) {
-        delete item->widget();
+        if (QWidget* widget = item->widget(); widget != nullptr) {
+            widget->hide();
+            widget->setParent(nullptr);
+            widget->deleteLater();
+        }
         delete item;
     }
 
@@ -195,6 +234,10 @@ void DevicePanel::rebuild_controls() {
     }
 
     core::Device* device = devices[static_cast<std::size_t>(row)];
+    // Captured by slot rather than by pointer: a control that outlives its
+    // device -- detached, or replaced by loading a board file -- then finds
+    // nothing and does nothing, instead of writing through a dangling one.
+    const std::size_t slot = device->slot();
     const std::vector<core::InputControl> inputs = device->inputs();
     if (inputs.empty()) {
         controls_layout_->addWidget(
@@ -220,13 +263,15 @@ void DevicePanel::rebuild_controls() {
                     box->setChecked(((control.value >> bit) & 1u) != 0);
                     box->setToolTip(QString("bit %1").arg(bit));
                     const std::size_t which = index;
-                    connect(box, &QCheckBox::toggled, this, [this, device, which, bit](bool on) {
-                        const std::vector<core::InputControl> current = device->inputs();
+                    connect(box, &QCheckBox::toggled, this, [this, slot, which, bit](bool on) {
+                        core::Device* target = session_->hart().bus().device_at_slot(slot);
+                        if (target == nullptr) return;
+                        const std::vector<core::InputControl> current = target->inputs();
+                        if (which >= current.size()) return;
                         u32 value = current[which].value;
                         value = on ? (value | (1u << bit)) : (value & ~(1u << bit));
-                        device->set_input(which, value);
-                        refresh();
-                        emit inputChanged();
+                        target->set_input(which, value);
+                        input_changed();
                     });
                     grid->addWidget(box, 0, control.bit_count - bit);
                 }
@@ -239,10 +284,11 @@ void DevicePanel::rebuild_controls() {
                 button->setCheckable(true);
                 button->setChecked(control.value != 0);
                 const std::size_t which = index;
-                connect(button, &QPushButton::toggled, this, [this, device, which](bool on) {
-                    device->set_input(which, on ? 1u : 0u);
-                    refresh();
-                    emit inputChanged();
+                connect(button, &QPushButton::toggled, this, [this, slot, which](bool on) {
+                    core::Device* target = session_->hart().bus().device_at_slot(slot);
+                    if (target == nullptr) return;
+                    target->set_input(which, on ? 1u : 0u);
+                    input_changed();
                 });
                 controls_layout_->addWidget(button);
                 break;
@@ -257,7 +303,9 @@ void DevicePanel::rebuild_controls() {
                 auto* edit = new QLineEdit(QString::number(control.value), row_widget);
                 edit->setFont(mono());
                 const std::size_t which = index;
-                connect(edit, &QLineEdit::editingFinished, this, [this, device, which, edit] {
+                connect(edit, &QLineEdit::editingFinished, this, [this, slot, which, edit] {
+                    core::Device* target = session_->hart().bus().device_at_slot(slot);
+                    if (target == nullptr) return;
                     bool valid = false;
                     const QString text = edit->text().trimmed();
                     // Accept 0x…, 0b… and plain decimal, the same spellings the
@@ -271,9 +319,8 @@ void DevicePanel::rebuild_controls() {
                         return;
                     }
                     edit->setStyleSheet("");
-                    device->set_input(which, value);
-                    refresh();
-                    emit inputChanged();
+                    target->set_input(which, value);
+                    input_changed();
                 });
                 line->addWidget(edit, 1);
                 controls_layout_->addWidget(row_widget);

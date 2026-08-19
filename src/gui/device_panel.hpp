@@ -8,6 +8,8 @@
 
 #include <QWidget>
 
+#include <string>
+
 #include "dbg/session.hpp"
 
 class QPushButton;
@@ -41,13 +43,25 @@ private slots:
     void on_selection_changed();
 
 private:
+    /// Redraw the table of what is attached, leaving the controls alone. This
+    /// is what a control's own handler calls: rebuilding the controls from
+    /// inside one of their signals would delete the widget that is mid-signal.
+    void refresh_list();
     void rebuild_controls();
+    /// Record the change, redraw the list, and tell the window. The one path
+    /// every control takes when it is operated.
+    void input_changed();
+    /// What the controls currently on screen were built from -- the selected
+    /// device and its input values. Rebuilding only when this changes keeps a
+    /// control the user is operating from being torn down underneath them.
+    std::string controls_signature() const;
 
     dbg::DebugSession* session_;
     QTableWidget* list_ = nullptr;
     QWidget* controls_ = nullptr;
     QVBoxLayout* controls_layout_ = nullptr;
     QPushButton* remove_ = nullptr;
+    std::string controls_built_;
 };
 
 }  // namespace rv::gui

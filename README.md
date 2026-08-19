@@ -10,8 +10,8 @@ serves three questions:
 2. **How did this instruction become 32 bits?** — a bitfield breakdown panel
 3. **Why did it not assemble?** — line, column, caret, and a suggested fix
 
-The editor suggests the instruction in a strip that folds away once it is
-chosen, then greys the operands it still wants in after the caret — a form to
+The editor suggests the instruction in a small block under the caret that folds
+away once it is chosen, then greys the operands it still wants in after the caret — a form to
 fill rather than a manual to consult. Both are generated from the same table
 the assembler encodes with — so a hint
 cannot promise something F5 will refuse. Peripherals are configurable: add a

@@ -34,9 +34,12 @@ QColor colour_for(as::Severity severity) {
 
 namespace {
 
-constexpr int kBarPadding = 8;
+constexpr int kBarPadding = 6;
 constexpr int kItemPadding = 7;
 constexpr int kItemGap = 4;
+/// How many candidates the block shows before it says "+N" instead. A block
+/// under the caret is a nudge, not a catalogue.
+constexpr std::size_t kMaxShown = 8;
 
 }  // namespace
 
@@ -48,7 +51,25 @@ SuggestionBar::SuggestionBar(QWidget* parent) : QWidget(parent) {
     hide();
 }
 
-QSize SuggestionBar::sizeHint() const { return QSize(0, fontMetrics().height() + 8); }
+int SuggestionBar::content_width() const {
+    const QFontMetrics metrics(font());
+    int width_of = 2 * kBarPadding;
+    const std::size_t shown = std::min(candidates_.size(), kMaxShown);
+    for (std::size_t index = 0; index < shown; ++index) {
+        width_of += metrics.horizontalAdvance(QString::fromStdString(candidates_[index].text)) +
+                    2 * kItemPadding + kItemGap;
+    }
+    if (shown < candidates_.size()) {
+        width_of += metrics.horizontalAdvance(
+                        QStringLiteral("+%1").arg(candidates_.size() - shown)) +
+                    2 * kItemPadding;
+    }
+    return width_of;
+}
+
+QSize SuggestionBar::sizeHint() const {
+    return QSize(content_width(), fontMetrics().height() + 8);
+}
 
 void SuggestionBar::show_for(std::vector<as::Completion> candidates) {
     candidates_ = std::move(candidates);
@@ -89,33 +110,37 @@ void SuggestionBar::paintEvent(QPaintEvent* /*event*/) {
 
     QPainter painter(this);
     painter.setFont(font());
-    painter.fillRect(rect(), QColor(0x1a, 0x1d, 0x22));
-    painter.setPen(QColor(0x2c, 0x31, 0x39));
-    painter.drawLine(0, 0, width(), 0);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    // A border, because this floats over the code rather than sitting in a
+    // reserved strip -- without one it would read as part of the program.
+    const QRectF frame = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
+    painter.setPen(QColor(0x39, 0x40, 0x4b));
+    painter.setBrush(QColor(0x21, 0x25, 0x2c));
+    painter.drawRoundedRect(frame, 4, 4);
 
     const QFontMetrics metrics(font());
     const int baseline = (height() + metrics.ascent() - metrics.descent()) / 2;
     int x = kBarPadding;
-    std::size_t shown = 0;
+    const std::size_t shown = std::min(candidates_.size(), kMaxShown);
 
-    for (std::size_t index = 0; index < candidates_.size(); ++index) {
+    for (std::size_t index = 0; index < shown; ++index) {
         const QString text = QString::fromStdString(candidates_[index].text);
         const int width_of = metrics.horizontalAdvance(text) + 2 * kItemPadding;
-        // Leave room for the "+N" that says how many did not fit, or the bar
-        // would quietly lie about what is on offer.
-        if (x + width_of > width() - 6 * metrics.horizontalAdvance(QLatin1Char('9'))) break;
 
         if (index == static_cast<std::size_t>(current_)) {
-            painter.fillRect(QRect(x, 3, width_of, height() - 6), QColor(0x2f, 0x4b, 0x6e));
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(0x2f, 0x4b, 0x6e));
+            painter.drawRoundedRect(QRectF(x, 3, width_of, height() - 6), 3, 3);
             painter.setPen(QColor(0xe6, 0xed, 0xf3));
         } else {
             painter.setPen(QColor(0x8b, 0x94, 0xa1));
         }
         painter.drawText(x + kItemPadding, baseline, text);
         x += width_of + kItemGap;
-        ++shown;
     }
 
+    // Never quietly drop the rest -- say how many are not being shown.
     if (shown < candidates_.size()) {
         painter.setPen(QColor(0x5f, 0x67, 0x73));
         painter.drawText(x + kItemPadding, baseline,
@@ -154,12 +179,15 @@ EditorWidget::EditorWidget(QWidget* parent) : QPlainTextEdit(parent), gutter_(ne
 
     new AsmHighlighter(document());
 
-    // A strip along the bottom rather than a popup over the code: it is the
-    // one place that never covers what is being written, and it folds away the
-    // moment the instruction is settled.
+    // A small block under the caret, which is where the eye already is. It
+    // floats over the text rather than claiming a row, so opening it never
+    // moves the line being written.
     bar_ = new SuggestionBar(this);
     connect(this, &QPlainTextEdit::cursorPositionChanged, this, &EditorWidget::update_ghost);
     connect(this, &QPlainTextEdit::textChanged, this, &EditorWidget::update_ghost);
+    // The block is pinned to the caret, so it has to follow it -- both when it
+    // moves and when the view scrolls under it.
+    connect(this, &QPlainTextEdit::cursorPositionChanged, this, &EditorWidget::place_bar);
 
     connect(this, &QPlainTextEdit::blockCountChanged, this, &EditorWidget::update_gutter_width);
     connect(this, &QPlainTextEdit::updateRequest, this, &EditorWidget::update_gutter);
@@ -187,29 +215,38 @@ void EditorWidget::update_gutter(const QRect& rect, int dy) {
         gutter_->update(0, rect.y(), gutter_->width(), rect.height());
     }
     if (rect.contains(viewport()->rect())) update_gutter_width();
+    place_bar();
 }
 
 void EditorWidget::resizeEvent(QResizeEvent* event) {
     QPlainTextEdit::resizeEvent(event);
     const QRect area = contentsRect();
-    const int bar_height = bar_->is_open() ? bar_->sizeHint().height() : 0;
-    gutter_->setGeometry(
-        QRect(area.left(), area.top(), gutter_width(), area.height() - bar_height));
-    bar_->setGeometry(
-        QRect(area.left(), area.bottom() - bar_height + 1, area.width(), bar_height));
-    setViewportMargins(gutter_width(), 0, 0, bar_height);
+    gutter_->setGeometry(QRect(area.left(), area.top(), gutter_width(), area.height()));
+    place_bar();
 }
 
-void EditorWidget::layout_bar() {
-    // Opening and closing the bar changes how much room the text has, so the
-    // viewport has to be re-measured rather than merely repainted.
-    const QRect area = contentsRect();
-    const int bar_height = bar_->is_open() ? bar_->sizeHint().height() : 0;
-    gutter_->setGeometry(
-        QRect(area.left(), area.top(), gutter_width(), area.height() - bar_height));
-    bar_->setGeometry(
-        QRect(area.left(), area.bottom() - bar_height + 1, area.width(), bar_height));
-    setViewportMargins(gutter_width(), 0, 0, bar_height);
+void EditorWidget::place_bar() {
+    if (!bar_->is_open()) return;
+
+    // Under the word being typed, on the next line down, so it points at what
+    // it is about without covering it.
+    const QRect caret = cursorRect();
+    const int height_of = bar_->sizeHint().height();
+    const int width_of = std::min(bar_->content_width(), viewport()->width());
+
+    int x = viewport()->x() + caret.left();
+    x = std::min(x, viewport()->x() + viewport()->width() - width_of);
+    x = std::max(x, viewport()->x());
+
+    // Below the line normally; above it when there is no room, which is what
+    // happens on the last line of a full screen.
+    int y = viewport()->y() + caret.bottom() + 3;
+    if (y + height_of > viewport()->y() + viewport()->height()) {
+        y = viewport()->y() + caret.top() - height_of - 3;
+    }
+
+    bar_->setGeometry(QRect(x, y, width_of, height_of));
+    bar_->raise();
 }
 
 // ---------------------------------------------------------------------------
@@ -267,16 +304,14 @@ void EditorWidget::request_completion() {
 
     typed_prefix_ = QString::fromStdString(context.prefix);
     previewing_ = false;
-    const bool was_open = bar_->is_open();
     bar_->show_for(std::move(candidates));
-    if (!was_open) layout_bar();
+    place_bar();
 }
 
 void EditorWidget::close_bar() {
     if (!bar_->is_open()) return;
     bar_->fold();
     previewing_ = false;
-    layout_bar();
 }
 
 void EditorWidget::cycle_suggestion(int delta) {

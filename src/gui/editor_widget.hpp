@@ -21,10 +21,11 @@ namespace rv::gui {
 
 class EditorWidget;
 
-/// The strip along the bottom of the editor listing the instructions that
-/// match what is being typed. It is only up while a mnemonic is being written:
-/// once the instruction is settled the operands take over as ghost text, and
-/// the strip folds away so the editor gets its line back.
+/// The small block under the caret listing the instructions that match what is
+/// being typed. It is only up while a mnemonic is being written: once the
+/// instruction is settled the operands take over as ghost text and the block
+/// folds away. It floats over the text rather than claiming a row of its own,
+/// so opening it never moves the line being written.
 class SuggestionBar final : public QWidget {
     Q_OBJECT
 
@@ -44,6 +45,9 @@ public:
     const as::Completion* highlighted() const;
     QStringList entries() const;
 
+    /// Just wide enough for the candidates -- the block is meant to sit under
+    /// a word, not to span the editor.
+    int content_width() const;
     QSize sizeHint() const override;
 
 protected:
@@ -130,8 +134,8 @@ private slots:
 
 private:
     void apply_diagnostic_marks();
-    /// Re-measure the viewport around the bar, which claims a line when open.
-    void layout_bar();
+    /// Put the block under the caret, kept inside the viewport.
+    void place_bar();
 
     GutterWidget* gutter_;
     SuggestionBar* bar_ = nullptr;

@@ -24,30 +24,33 @@ pseudo-instruction — that is how `li a0, 0x12345` stops being a mystery.
 
 Two halves, and only ever one of them at a time.
 
-**Choosing the instruction.** Type two characters and a strip opens along the
-bottom of the editor with what matches. `Ctrl+Space` opens it explicitly.
+**Choosing the instruction.** Type two characters and a small block opens
+under the caret with what matches. `Ctrl+Space` opens it explicitly. It floats
+over the text, so opening it never moves the line being written, and it shows
+eight candidates before saying `+N` rather than quietly dropping the rest.
 
 ```
         ad│
- ─────────────────────
-  add   addi
- ^^^^^ the one Tab will take
+        ┌──────────────┐
+        │ add    addi  │
+        └──────────────┘
+          ^^^ the one Tab will take
 ```
 
 `Tab` walks along it, and each step lands **in the line** rather than only in
-the strip — the choice is read where the code is. `Enter` settles on the
-highlighted one and leaves the caret at its operands. `Esc` folds the strip
+the block — the choice is read where the code is. `Enter` settles on the
+highlighted one and leaves the caret at its operands. `Esc` folds the block
 away, keeping whatever is typed.
 
 | Key | What it does |
 |---|---|
-| `Ctrl+Space` | Open the strip here |
+| `Ctrl+Space` | Open the block here |
 | `Tab` / `Shift+Tab` | Walk forward / back, writing each into the line |
 | `Enter` | Settle on the highlighted one |
-| `Esc` | Fold the strip away |
+| `Esc` | Fold the block away |
 
-**Filling in the operands.** Once the instruction is settled the strip folds
-away — the editor gets its line back — and the operands it still wants appear
+**Filling in the operands.** Once the instruction is settled the block folds
+away and the operands it still wants appear
 in grey after the caret, the way a form shows what a field is for. They are not
 text: typing goes straight through them, and each disappears as it is filled.
 

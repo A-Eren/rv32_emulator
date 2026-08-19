@@ -8,7 +8,9 @@
 // synthesising clicks, because the actions are what the toolbar and the menu
 // call too -- testing them tests the real path.
 #include <QApplication>
+#include <QCheckBox>
 #include <QListWidget>
+#include <QPointer>
 #include <QTableWidget>
 
 #include "core/device_config.hpp"
@@ -343,6 +345,62 @@ RV_TEST(gui, memory_can_be_edited_by_hand) {
     RV_CHECK_HEX(fixture.session().read_dmem_word(0x10), 0xdeadbeefu);
 }
 
+RV_TEST(gui, operating_a_switch_does_not_destroy_the_control_operating_it) {
+    // The crash this is here for: a control's handler called refresh(), which
+    // rebuilt the controls, which deleted the very checkbox whose toggled()
+    // signal was still on the stack. Qt then returned into freed memory.
+    Fixture fixture;
+    auto* panel = fixture.window.findChild<DevicePanel*>();
+    RV_CHECK(panel != nullptr);
+    if (panel == nullptr) return;
+
+    QTableWidget* list = panel->findChild<QTableWidget*>();
+    RV_CHECK(list != nullptr);
+    if (list == nullptr) return;
+
+    int switches_row = -1;
+    for (int row = 0; row < list->rowCount(); ++row) {
+        if (list->item(row, 2)->text() == "switches") switches_row = row;
+    }
+    RV_CHECK_NE(switches_row, -1);
+    if (switches_row < 0) return;
+    list->selectRow(switches_row);
+
+    const QList<QCheckBox*> boxes = panel->findChildren<QCheckBox*>();
+    RV_CHECK_EQ(boxes.size(), 32);
+    if (boxes.isEmpty()) return;
+
+    // Bit 0 is the last one, since the row is painted bit 31 first.
+    QPointer<QCheckBox> bit0 = boxes.back();
+    bit0->setChecked(true);
+
+    RV_CHECK(!bit0.isNull());  // it used to be deleted here, under its own signal
+    RV_CHECK_HEX(fixture.session().hart().bus().switches()->value(), 1u);
+
+    // And it still works the second time, which the dangling one did not.
+    bit0->setChecked(false);
+    RV_CHECK(!bit0.isNull());
+    RV_CHECK_HEX(fixture.session().hart().bus().switches()->value(), 0u);
+}
+
+RV_TEST(gui, a_step_does_not_rebuild_the_controls_underneath_the_user) {
+    // refresh() runs after every step. Tearing the controls down each time
+    // would take the focus out of whatever is being operated -- and put a
+    // deleted widget under the mouse.
+    Fixture fixture;
+    auto* panel = fixture.window.findChild<DevicePanel*>();
+    QTableWidget* list = panel->findChild<QTableWidget*>();
+    for (int row = 0; row < list->rowCount(); ++row) {
+        if (list->item(row, 2)->text() == "switches") list->selectRow(row);
+    }
+    QPointer<QCheckBox> box = panel->findChildren<QCheckBox*>().back();
+    RV_CHECK(!box.isNull());
+
+    fixture.window.step_line();
+    fixture.window.step_line();
+    RV_CHECK(!box.isNull());
+}
+
 RV_TEST(gui, a_device_configuration_round_trips_through_the_panel) {
     Fixture fixture;
     core::Bus& bus = fixture.session().hart().bus();
@@ -435,6 +493,25 @@ RV_TEST(gui, the_bar_folds_away_once_the_instruction_is_settled) {
     fixture.editor().request_completion();
     RV_CHECK(!fixture.editor().suggestion_bar()->is_open());
     RV_CHECK_STR(fixture.editor().ghost_text().toStdString(), ", imm(-2048..2047)");
+}
+
+RV_TEST(gui, the_block_sits_under_the_caret_and_not_across_the_editor) {
+    // It follows the word it is about, and it is sized to its candidates: a
+    // full-width strip would be a long way from what it refers to, and it
+    // would cost the editor a row every time it opened.
+    Fixture fixture;
+    fixture.editor().setPlainText("        ad");
+    QTextCursor cursor = fixture.editor().textCursor();
+    cursor.movePosition(QTextCursor::End);
+    fixture.editor().setTextCursor(cursor);
+    fixture.editor().request_completion();
+
+    // Within a line or two of the caret -- below it normally, above it when
+    // there is no room below -- rather than parked at the edge of the editor.
+    const QRect caret = fixture.editor().cursorRect();
+    const QRect block = fixture.editor().suggestion_bar()->geometry();
+    RV_CHECK(std::abs(block.center().y() - caret.center().y()) <= 2 * block.height());
+    RV_CHECK(block.width() < fixture.editor().width() / 2);
 }
 
 RV_TEST(gui, tab_walks_along_the_bar_and_lands_in_the_buffer) {
