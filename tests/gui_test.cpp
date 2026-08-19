@@ -581,6 +581,50 @@ RV_TEST(gui, a_block_exports_itself_at_its_own_depth) {
     QFile::remove(path);
 }
 
+RV_TEST(gui, instructions_past_the_end_of_imem_are_marked_not_cut) {
+    // load_words truncates silently, so a program too big for the machine used
+    // to become a different program without saying so. It is marked instead:
+    // what was written is still what is there.
+    QString source = "        .text\n_start:\n";
+    for (int i = 0; i < 80; ++i) source += "        addi    a0, a0, 1\n";
+
+    Fixture fixture;
+    fixture.session().hart().resize_memories(256, 256);  // 64 words
+    fixture.editor().setPlainText(source);
+    fixture.window.assemble();
+
+    // Line 3 is the first instruction, so lines 3..66 fit and 67 onwards do not.
+    const std::vector<int>& marked = fixture.editor().overflow_lines();
+    RV_CHECK_EQ(marked.size(), std::size_t{16});
+    RV_CHECK_EQ(marked.front(), 67);
+    RV_CHECK_EQ(marked.back(), 82);
+
+    // And the program is left whole rather than trimmed to what fits.
+    RV_CHECK_EQ(fixture.session().program().imem_words.size(), std::size_t{80});
+
+    // A bigger machine makes it go away -- both ends of the comparison move.
+    fixture.session().hart().resize_memories(1024, 256);
+    fixture.window.assemble();
+    RV_CHECK(fixture.editor().overflow_lines().empty());
+}
+
+RV_TEST(gui, data_past_the_end_of_dmem_is_reported_even_with_no_line_to_mark) {
+    // .data sits in its own space and the source map covers instructions, so
+    // there is no line to paint -- which is a reason to say it elsewhere, not
+    // a reason to say nothing.
+    Fixture fixture;
+    fixture.session().hart().resize_memories(4096, 256);
+    fixture.editor().setPlainText(
+        "        .data\n"
+        "buffer: .zero 512\n"
+        "        .text\n"
+        "_start: ebreak\n");
+    fixture.window.assemble();
+
+    RV_CHECK(fixture.editor().overflow_lines().empty());
+    RV_CHECK_NE(fixture.window.message().indexOf("past the end of dmem"), -1);
+}
+
 RV_TEST(gui, a_device_can_be_renamed_after_it_exists) {
     // What two of a kind should be called is usually clear only once both are
     // there, so naming cannot be confined to the moment of adding.

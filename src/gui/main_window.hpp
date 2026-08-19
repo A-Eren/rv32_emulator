@@ -69,6 +69,8 @@ public:
     dbg::DebugSession& session() { return *session_; }
     EditorWidget& editor() { return *editor_; }
     QString status_text() const;
+    /// The last thing said in the message line, for the tests.
+    QString message() const { return message_text_; }
     /// Select a dock tab by name, for screenshots and for tests.
     bool show_tab(const QString& title);
 

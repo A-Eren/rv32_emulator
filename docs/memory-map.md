@@ -20,6 +20,32 @@ to assemble into the machine you now have.
 Exported as `imem.mem`. Not readable with `lw`, not writable at all — there is
 no self-modifying code on this machine.
 
+### When a program does not fit
+
+The lines whose instructions land past the end are **marked, not cut**: a red
+bar in the margin and the line painted red across its width.
+
+```
+  66 │        addi    a0, a0, 15
+▮ 67 │███████ addi    a0, a0, 0 ██████████
+▮ 68 │███████ addi    a0, a0, 1 ██████████
+```
+
+Loading truncates at the end of the memory, so without the mark a program too
+big for the machine quietly becomes a *different* program — one that runs off
+the end of what was loaded and does whatever is there. The mark says which
+instructions have nowhere to go, and leaves the program alone.
+
+It is not an error. What is written is valid; there is simply nowhere to put
+it, and either a bigger memory or a shorter program makes it go away. Both ends
+of that comparison can move, so it is recomputed after assembling and after
+either memory is resized.
+
+The marked lines come from the source map rather than from counting, because
+one line can be two instructions and the second may be the one that does not
+fit. Data past the end of DMEM says so in the message line instead: `.data`
+lives in its own space and has no line in the map to paint.
+
 ## Data memory (DMEM)
 
 | Range | Size | Access |

@@ -80,6 +80,11 @@ Standard editing keys, plus:
 | Click the margin | Toggle a breakpoint on that line |
 | Click a diagnostic | Jump to the line it points at |
 
+Lines whose instructions land past the end of instruction memory are painted
+red with a bar in the margin. Not an error — what is written is valid, there is
+simply nowhere to put it — so it marks rather than stops, and a bigger memory
+or a shorter program makes it go away.
+
 A failed `F5` keeps the buffer, marks the line in the margin, underlines the
 exact span and puts the caret on it. It assembles a detached copy first, so a
 broken edit never destroys the program you are already stepping.
