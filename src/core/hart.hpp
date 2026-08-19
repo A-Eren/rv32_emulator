@@ -61,8 +61,15 @@ struct StepOutcome {
 
     u64 cycle_before = 0;
     u64 instret_before = 0;
-    /// Device state before the step, so undo can put it back.
-    DeviceState devices_before;
+
+    /// The device this step wrote to, and the state a peek/poke pair cannot
+    /// express -- only the UART has any, and it is one word. Everything else a
+    /// device write changes is covered by the ordinary one-word memory delta,
+    /// because devices implement side-effect-free peek and poke.
+    std::size_t device_slot = kNoDevice;
+    u32 device_aux_before = 0;
+
+    static constexpr std::size_t kNoDevice = ~std::size_t{0};
 };
 
 class Hart {

@@ -33,6 +33,7 @@ add_library(rv_core STATIC
     src/core/csrfile.cpp
     src/core/memory.cpp
     src/core/devices.cpp
+    src/core/device_config.cpp
     src/core/bus.cpp
     src/core/exec.cpp
     src/core/hart.cpp
@@ -53,6 +54,7 @@ add_library(rv_asm STATIC
     src/asm/diag_render.cpp
     src/asm/directive.cpp
     src/asm/lexer.cpp
+    src/asm/complete.cpp
     src/asm/symtab.cpp
     src/asm/pseudo.cpp
     src/asm/parser.cpp
@@ -102,6 +104,7 @@ if(Qt6_FOUND)
     add_executable(rv32-gui
         src/gui/gui_main.cpp
         src/gui/main_window.cpp
+        src/gui/device_panel.cpp
         src/gui/editor_widget.cpp
         src/gui/encoding_widget.cpp
         src/gui/highlighter.cpp
@@ -116,6 +119,7 @@ if(Qt6_FOUND)
     add_executable(rv_gui_tests
         tests/gui_test.cpp
         src/gui/main_window.cpp
+        src/gui/device_panel.cpp
         src/gui/editor_widget.cpp
         src/gui/encoding_widget.cpp
         src/gui/highlighter.cpp
@@ -155,9 +159,11 @@ add_executable(rv_tests
     tests/unit_csr_trap.cpp
     tests/unit_interrupt.cpp
     tests/unit_memfile.cpp
+    tests/unit_devices.cpp
     tests/unit_lexer.cpp
     tests/unit_diag_render.cpp
     tests/unit_assembler.cpp
+    tests/unit_complete.cpp
     tests/unit_session.cpp
 )
 target_link_libraries(rv_tests PRIVATE rv_cmd)
@@ -165,8 +171,8 @@ target_include_directories(rv_tests PRIVATE tests)
 rv_set_warnings(rv_tests)
 
 # One CTest entry per suite, so a failure can be re-run in isolation.
-foreach(suite fields decode roundtrip exec_alu exec_mem exec_branch exec_m exec_coverage csr_trap interrupt memfile
-              lexer diag_render assembler session)
+foreach(suite fields decode roundtrip exec_alu exec_mem exec_branch exec_m exec_coverage csr_trap interrupt memfile devices
+              lexer diag_render assembler complete session)
     add_test(NAME unit.${suite} COMMAND rv_tests --filter=${suite})
 endforeach()
 

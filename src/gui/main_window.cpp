@@ -21,6 +21,7 @@
 
 #include "asm/assembler.hpp"
 #include "gui/editor_widget.hpp"
+#include "gui/device_panel.hpp"
 #include "gui/encoding_widget.hpp"
 #include "isa/disasm.hpp"
 #include "isa/regnames.hpp"
@@ -99,9 +100,22 @@ void MainWindow::build_layout() {
         view->setLineWrapMode(QPlainTextEdit::NoWrap);
         return view;
     };
-    memory_ = make_text();
     console_ = make_text();
-    io_ = make_text();
+
+    // An editable table rather than a text dump: being able to type a value
+    // into memory while stopped is most of what makes poking at a program
+    // useful, and a read-only hex block cannot offer it.
+    memory_ = new QTableWidget(32, 5, this);
+    memory_->setHorizontalHeaderLabels({"address", "+0", "+4", "+8", "+c"});
+    memory_->verticalHeader()->setVisible(false);
+    memory_->setFont(mono());
+    memory_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    memory_->verticalHeader()->setDefaultSectionSize(QFontMetrics(mono()).height() + 4);
+    connect(memory_, &QTableWidget::cellChanged, this, &MainWindow::on_memory_edited);
+
+    devices_ = new DevicePanel(*session_, this);
+    connect(devices_, &DevicePanel::devicesChanged, this, &MainWindow::refresh_all);
+    connect(devices_, &DevicePanel::inputChanged, this, &MainWindow::refresh_all);
 
     symbols_ = new QTableWidget(0, 4, this);
     symbols_->setHorizontalHeaderLabels({"name", "space", "value", "line"});
@@ -114,7 +128,7 @@ void MainWindow::build_layout() {
     dock_->addTab(encoding_, "Encoding");
     dock_->addTab(memory_, "Memory");
     dock_->addTab(console_, "Console");
-    dock_->addTab(io_, "I/O");
+    dock_->addTab(devices_, "Devices");
     dock_->addTab(symbols_, "Symbols");
 
     diagnostics_ = new QListWidget(this);
@@ -158,6 +172,9 @@ void MainWindow::build_actions() {
     file_menu->addAction("&Open…", QKeySequence::Open, this, &MainWindow::on_open_file);
     file_menu->addAction("&Save", QKeySequence::Save, this, &MainWindow::on_save);
     file_menu->addAction("Save &As…", QKeySequence::SaveAs, this, &MainWindow::on_save_as);
+    file_menu->addSeparator();
+    file_menu->addAction("Load &peripherals…", this, &MainWindow::on_load_devices);
+    file_menu->addAction("Save p&eripherals…", this, &MainWindow::on_save_devices);
     file_menu->addSeparator();
     file_menu->addAction("&Quit", QKeySequence::Quit, this, &QWidget::close);
 
@@ -292,6 +309,8 @@ void MainWindow::assemble() {
     }
 
     session_->load_source(text.toStdString(), name, options);
+    // The completer offers this program's labels as branch and load targets.
+    editor_->set_symbols(&session_->symbols());
     encoding_->follow_pc();
     set_message(QString::asprintf("assembled: %zu instructions, %zu bytes of data",
                                   session_->program().imem_words.size(),
@@ -390,8 +409,8 @@ void MainWindow::refresh_all() {
     refresh_registers();
     refresh_memory();
     refresh_console();
-    refresh_io();
     refresh_symbols();
+    if (devices_ != nullptr) devices_->refresh();
     refresh_diagnostics();
     refresh_status();
 
@@ -451,63 +470,67 @@ void MainWindow::refresh_registers() {
 }
 
 void MainWindow::refresh_memory() {
-    QString text;
     const Addr highlight = session_->last_step().mem_written;
-    Addr base = 0;
-    // Follow a store, but only when it landed outside the window already shown.
-    if (highlight != core::kNoAddr && highlight >= 0x100u) base = (highlight & ~0xfu) - 0x40u;
-
-    for (int row = 0; row < 32; ++row) {
-        const Addr address = base + static_cast<Addr>(row * 16);
-        text += QString::asprintf("%08x ", address);
-        QString ascii;
-        for (int index = 0; index < 4; ++index) {
-            const u32 value = session_->read_dmem_word(address + static_cast<Addr>(index * 4));
-            text += QString::asprintf("%08x ", value);
-            for (int byte = 0; byte < 4; ++byte) {
-                const auto character = static_cast<char>((value >> (8 * byte)) & 0xffu);
-                ascii += (character >= 0x20 && character < 0x7f) ? QChar(character) : QChar('.');
-            }
-        }
-        text += " |" + ascii + "|\n";
+    // Follow a store, but only when it landed outside the window already on
+    // screen: jumping on every store would make a loop unreadable.
+    if (highlight != core::kNoAddr &&
+        (highlight < memory_base_ || highlight >= memory_base_ + 32 * 16)) {
+        memory_base_ = highlight >= 0x80u ? (highlight & ~0xfu) - 0x80u : 0u;
     }
-    memory_->setPlainText(text);
+
+    // Blocking keeps the programmatic fill from being mistaken for the user
+    // typing, which would write memory back to itself on every step.
+    const QSignalBlocker blocker(memory_);
+    for (int row = 0; row < memory_->rowCount(); ++row) {
+        const Addr address = memory_base_ + static_cast<Addr>(row * 16);
+
+        const auto set = [&](int column, const QString& text, bool editable, bool changed) {
+            QTableWidgetItem* item = memory_->item(row, column);
+            if (item == nullptr) {
+                item = new QTableWidgetItem;
+                memory_->setItem(row, column, item);
+            }
+            item->setText(text);
+            item->setFlags(editable ? (Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable)
+                                    : (Qt::ItemIsEnabled | Qt::ItemIsSelectable));
+            item->setForeground(changed ? kChangedColour
+                                        : (editable ? kNormalColour : kZeroColour));
+        };
+
+        set(0, QString::asprintf("%08x", address), false, false);
+        for (int index = 0; index < 4; ++index) {
+            const Addr at = address + static_cast<Addr>(index * 4);
+            const u32 value = session_->read_dmem_word(at);
+            set(index + 1, QString::asprintf("%08x", value), true, at == highlight);
+        }
+    }
+}
+
+void MainWindow::on_memory_edited(int row, int column) {
+    if (column < 1 || column > 4) return;
+    QTableWidgetItem* item = memory_->item(row, column);
+    if (item == nullptr) return;
+
+    bool valid = false;
+    const u32 value = item->text().trimmed().toUInt(&valid, 16);
+    if (!valid) {
+        set_message("not a hex value: " + item->text(), true);
+        refresh_memory();
+        return;
+    }
+
+    const Addr address =
+        memory_base_ + static_cast<Addr>(row * 16) + static_cast<Addr>((column - 1) * 4);
+    // poke rather than store: this is the debugger writing, so it must not
+    // trigger whatever a device would do on a write from the program.
+    session_->hart().bus().poke_word(address, value);
+    set_message(QString::asprintf("[0x%08x] = 0x%08x", address, value));
+    refresh_all();
 }
 
 void MainWindow::refresh_console() {
     const QString text = QString::fromStdString(session_->uart_output());
     console_->setPlainText(text.isEmpty() ? "(nothing written to the uart yet)" : text);
-}
-
-void MainWindow::refresh_io() {
-    const core::Bus& bus = session_->hart().bus();
-    const u32 pending = bus.pending_interrupts(session_->cpu().cycle);
-    const u32 enabled = session_->cpu().csr.read(0x304);
-    const bool global = bit(session_->cpu().csr.read(0x300), 3) != 0;
-    const auto flag = [](u32 mask, u32 bits) { return (bits & mask) != 0 ? "1" : "."; };
-
-    QString text;
-    text += QString::asprintf("leds       0xffff0010  %08x\n", bus.leds().value());
-    text += QString::asprintf("switches   0xffff0020  %08x\n", bus.switches().value());
-    text += QString::asprintf("mtime      0xffff0030  %08x   the cycle counter\n",
-                              static_cast<u32>(session_->cpu().cycle));
-    text += QString::asprintf("mtimecmp   0xffff0040  %08x   %s\n", bus.timer().compare(),
-                              bus.timer().armed() ? "armed" : "disarmed");
-    text += QString::asprintf("uart       0xffff0000  %8zu   bytes written\n\n",
-                              session_->uart_output().size());
-    text += QString::asprintf("irq  pending ext=%s sw=%s timer=%s\n",
-                              flag(core::kIrqExternal, pending), flag(core::kIrqSoftware, pending),
-                              flag(core::kIrqTimer, pending));
-    text += QString::asprintf("     mie     ext=%s sw=%s timer=%s     %s\n",
-                              flag(core::kIrqExternal, enabled), flag(core::kIrqSoftware, enabled),
-                              flag(core::kIrqTimer, enabled), global ? "MIE on" : "MIE off");
-
-    QString bits;
-    for (int index = 31; index >= 0; --index) {
-        bits += ((bus.leds().value() >> index) & 1u) != 0 ? '#' : '.';
-    }
-    text += "\nleds  " + bits + "\n";
-    io_->setPlainText(text);
 }
 
 void MainWindow::refresh_symbols() {
@@ -555,6 +578,16 @@ void MainWindow::refresh_diagnostics() {
 
 QString MainWindow::status_text() const { return status_->text(); }
 
+bool MainWindow::show_tab(const QString& title) {
+    for (int index = 0; index < dock_->count(); ++index) {
+        if (dock_->tabText(index).compare(title, Qt::CaseInsensitive) == 0) {
+            dock_->setCurrentIndex(index);
+            return true;
+        }
+    }
+    return false;
+}
+
 void MainWindow::refresh_status() {
     const core::CpuState& cpu = session_->cpu();
     QString text = QString::asprintf("pc %08x   cycle %llu   instret %llu",
@@ -594,6 +627,26 @@ void MainWindow::on_diagnostic_activated(int row) {
     if (item == nullptr) return;
     editor_->go_to_line(item->data(Qt::UserRole).toInt());
     editor_->setFocus();
+}
+
+void MainWindow::on_load_devices() {
+    const QString path = QFileDialog::getOpenFileName(this, "Load peripherals", devices_path_,
+                                                      "Device configuration (*.toml)");
+    if (path.isEmpty()) return;
+    if (devices_->load_config(path)) {
+        devices_path_ = path;
+        set_message("peripherals loaded from " + path);
+    }
+}
+
+void MainWindow::on_save_devices() {
+    const QString path = QFileDialog::getSaveFileName(this, "Save peripherals", devices_path_,
+                                                      "Device configuration (*.toml)");
+    if (path.isEmpty()) return;
+    if (devices_->save_config(path)) {
+        devices_path_ = path;
+        set_message("peripherals saved to " + path);
+    }
 }
 
 void MainWindow::on_cursor_moved() {

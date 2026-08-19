@@ -176,7 +176,7 @@ void run_machine(core::Hart& hart, const Options& options) {
         std::printf("\n");
         print_nonzero_registers(hart.cpu(), options.numeric);
     }
-    const std::string& uart = hart.bus().uart().output();
+    const std::string& uart = hart.bus().uart_output();
     if (!uart.empty()) std::printf("\nuart output:\n%s\n", uart.c_str());
 }
 

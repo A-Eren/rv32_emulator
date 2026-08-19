@@ -42,11 +42,17 @@ ExecResult execute(CpuState& cpu, Bus& bus, const isa::DecodedInstr& instr,
         const Addr addr = rs1 + imm;
         const Addr aligned = addr & ~3u;
         const u32 before = bus.peek_word(aligned);
+        // A device may hold state no register can express; capture it before
+        // the write rather than trying to reconstruct it after.
+        const Device* target = bus.device_for_address(aligned);
+        const u32 aux_before = target != nullptr ? target->aux_state() : 0u;
+
         const MemResult result = bus.store(addr, width, rs2);
         if (!result.ok) return raise(result.cause, addr);
         out.mem_written = aligned;
         out.mem_width = width;
         out.mem_old = before;
+        out.device_aux_before = aux_before;
     };
 
     const auto branch_if = [&](bool taken) {
@@ -266,14 +272,16 @@ ExecResult execute(CpuState& cpu, Bus& bus, const isa::DecodedInstr& instr,
             const u32 pending = bus.pending_interrupts(cpu.cycle) & armed;
             if (pending != 0) break;  // already awake: retire immediately
 
-            const bool timer_armed = (armed & kIrqTimer) != 0 && bus.timer().armed();
+            const TimerDevice* timer = bus.timer();
+            const bool timer_armed =
+                (armed & kIrqTimer) != 0 && timer != nullptr && timer->armed();
             if (!timer_armed) {
                 // No timer to fire and nothing pending. Nothing can ever wake
                 // the hart, so say so rather than looping forever.
                 out.halt = HaltReason::WaitingForever;
                 break;
             }
-            out.advance_cycles = bus.timer().compare() - cpu.cycle;
+            out.advance_cycles = timer->compare() - cpu.cycle;
             break;
         }
 

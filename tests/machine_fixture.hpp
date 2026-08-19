@@ -62,8 +62,11 @@ class Machine {
 public:
     Machine() { hart_.reset(0); }
 
-    void load(std::initializer_list<Word> words) {
-        hart_.imem().load_words(std::vector<Word>(words));
+    void load(std::initializer_list<Word> words) { load(std::vector<Word>(words)); }
+
+    /// For tests that build their program with a helper rather than a literal.
+    void load(const std::vector<Word>& words) {
+        hart_.imem().load_words(words);
         hart_.reset(0);
     }
 

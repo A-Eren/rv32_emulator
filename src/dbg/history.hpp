@@ -34,7 +34,12 @@ struct StepDelta {
 
     u64 cycle_before = 0;
     u64 instret_before = 0;
-    core::DeviceState devices_before;
+    /// The device a write landed on, and the state its peek/poke could not
+    /// carry. See StepOutcome for why one word is enough.
+    u32 device_slot = kNoDevice;
+    u32 device_aux_before = 0;
+
+    static constexpr u32 kNoDevice = 0xffff'ffffu;
 
     /// Index into the side table of full CSR snapshots, or kNoSnapshot. Traps
     /// and mret change several CSRs at once; rather than widening this record

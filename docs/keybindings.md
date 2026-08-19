@@ -20,6 +20,43 @@ pseudo-instruction — that is how `li a0, 0x12345` stops being a mystery.
 
 `Back` greys out when there is no history left to undo.
 
+## Writing assembly
+
+Type two characters of a word and a small list appears with what fits there.
+`Ctrl+Space` asks for it explicitly, including with nothing typed — which is
+how to answer "what can go here?"
+
+```
+        ad│
+        ┌──────┐
+        │ add  │
+        │ addi │
+        └──────┘
+```
+
+The list knows where the caret is. In the leading position it offers
+instructions, pseudo-instructions and directives; in an operand position it
+offers only what belongs there — registers, CSR names, or the program's own
+labels.
+
+Underneath the editor, a line shows the signature of the instruction being
+written, with the operand the caret is in picked out and the values it accepts
+beside it:
+
+```
+addi rd, rs1, imm    imm(-2048..2047)
+                ^ the caret is here
+```
+
+Both come from `instr_table.def`, the same rows the assembler encodes with, so
+a hint cannot promise something F5 will refuse.
+
+| Key | What it does |
+|---|---|
+| `Ctrl+Space` | Offer completions here |
+| `Enter` / `Tab` | Accept the highlighted one |
+| `Esc` | Dismiss the list |
+
 ## Editing
 
 Standard editing keys, plus:
@@ -40,9 +77,9 @@ broken edit never destroys the program you are already stepping.
 |---|---|
 | Registers | Both spellings (`x10  a0`), zeros dimmed, and the register the last step wrote highlighted **and scrolled into view** |
 | Encoding | The instruction as labelled bitfields, and what it did. Follows the caret, so a line explains itself before it has ever run |
-| Memory | Data memory, following the last store |
+| Memory | Data memory and the peripherals, following the last store. **Editable** — type a hex value into a cell to write it |
+| Devices | What is attached, with buttons to add and remove, and each device's own controls: switch toggles, buttons, value fields |
 | Console | Whatever the program sent to the UART |
-| I/O | LEDs, switches, `mtime`/`mtimecmp`, and which interrupt lines are pending, unmasked and takeable |
 | Symbols | Every symbol with the **space** it lives in — the thing that explains why `call msg` was rejected |
 
 ## The command-line debugger

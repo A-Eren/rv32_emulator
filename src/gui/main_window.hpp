@@ -27,6 +27,7 @@ namespace rv::gui {
 
 class EditorWidget;
 class EncodingWidget;
+class DevicePanel;
 
 class MainWindow final : public QMainWindow {
     Q_OBJECT
@@ -53,6 +54,8 @@ public:
     dbg::DebugSession& session() { return *session_; }
     EditorWidget& editor() { return *editor_; }
     QString status_text() const;
+    /// Select a dock tab by name, for screenshots and for tests.
+    bool show_tab(const QString& title);
 
 private slots:
     void on_new_file();
@@ -61,6 +64,9 @@ private slots:
     void on_save_as();
     void on_diagnostic_activated(int row);
     void on_cursor_moved();
+    void on_memory_edited(int row, int column);
+    void on_load_devices();
+    void on_save_devices();
     void on_run_slice();
 
 private:
@@ -70,7 +76,7 @@ private:
     void refresh_registers();
     void refresh_memory();
     void refresh_console();
-    void refresh_io();
+
     void refresh_symbols();
     void refresh_diagnostics();
     void refresh_status();
@@ -88,9 +94,10 @@ private:
     EditorWidget* editor_ = nullptr;
     EncodingWidget* encoding_ = nullptr;
     QTableWidget* registers_ = nullptr;
-    QPlainTextEdit* memory_ = nullptr;
+    QTableWidget* memory_ = nullptr;
+    DevicePanel* devices_ = nullptr;
     QPlainTextEdit* console_ = nullptr;
-    QPlainTextEdit* io_ = nullptr;
+
     QTableWidget* symbols_ = nullptr;
     QListWidget* diagnostics_ = nullptr;
     QTabWidget* dock_ = nullptr;
@@ -106,6 +113,9 @@ private:
     QTimer* run_timer_ = nullptr;
 
     QString path_;
+    QString devices_path_;
+    /// First address the memory table shows.
+    Addr memory_base_ = 0;
     /// Buffer revision at the last successful assemble, so the status bar can
     /// say whether what is on screen has been built.
     int assembled_revision_ = -1;

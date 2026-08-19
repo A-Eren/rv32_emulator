@@ -101,7 +101,7 @@ StepOutcome Hart::step() {
     out.pc_after = cpu_.pc;
     out.cycle_before = cpu_.cycle;
     out.instret_before = cpu_.instret;
-    out.devices_before = bus_.capture();
+
     out.csr_before = cpu_.csr;
 
     if (halted()) {
@@ -122,7 +122,7 @@ StepOutcome Hart::step() {
     if (const auto interrupt = pending_interrupt()) {
         take_interrupt(*interrupt, out);
         ++cpu_.cycle;
-        bus_.cycles().set_cycles(cpu_.cycle);
+        if (CycleDevice* clock = bus_.cycles()) clock->set_cycles(cpu_.cycle);
         return out;
     }
 
@@ -155,13 +155,22 @@ StepOutcome Hart::step() {
     out.mem_written = result.mem_written;
     out.mem_width = result.mem_width;
     out.mem_old = result.mem_old;
+
+    // If the write landed on a device, remember whatever its peek/poke pair
+    // cannot restore.
+    if (result.mem_written != kNoAddr) {
+        if (Device* device = bus_.device_for_address(result.mem_written)) {
+            out.device_slot = device->slot();
+            out.device_aux_before = result.device_aux_before;
+        }
+    }
     // mret rewrites mstatus wholesale alongside jumping, so it needs the same
     // full-snapshot treatment as trap entry.
     if (out.instr.id == isa::InstrId::MRET) out.touched_many_csrs = true;
 
     // wfi asks to skip ahead to the next timer event.
     cpu_.cycle += 1 + result.advance_cycles;
-    bus_.cycles().set_cycles(cpu_.cycle);
+    if (CycleDevice* clock = bus_.cycles()) clock->set_cycles(cpu_.cycle);
 
     if (result.trapped) {
         take_trap(result.cause, result.tval, cpu_.pc, out);

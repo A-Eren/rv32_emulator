@@ -11,6 +11,8 @@
 #include <QListWidget>
 #include <QTableWidget>
 
+#include "core/device_config.hpp"
+#include "gui/device_panel.hpp"
 #include "gui/editor_widget.hpp"
 #include "gui/encoding_widget.hpp"
 #include "asm/lexer.hpp"
@@ -273,8 +275,150 @@ RV_TEST(gui, interrupts_are_visible_in_the_io_panel) {
         "        ebreak\n");
     for (int i = 0; i < 3; ++i) fixture.window.step_line();
 
-    RV_CHECK(fixture.session().hart().bus().timer().armed());
-    RV_CHECK_HEX(fixture.session().hart().bus().timer().compare(), 50u);
+    RV_CHECK(fixture.session().hart().bus().timer()->armed());
+    RV_CHECK_HEX(fixture.session().hart().bus().timer()->compare(), 50u);
+}
+
+RV_TEST(gui, the_device_panel_lists_what_is_attached) {
+    Fixture fixture;
+    auto* panel = fixture.window.findChild<DevicePanel*>();
+    RV_CHECK(panel != nullptr);
+
+    auto* list = panel->findChild<QTableWidget*>();
+    RV_CHECK(list != nullptr);
+    RV_CHECK_EQ(list->rowCount(),
+                static_cast<int>(fixture.session().hart().bus().devices().size()));
+
+    // The address is what a program needs, so it is in the table rather than
+    // left to be worked out from the slot.
+    bool found_uart = false;
+    for (int row = 0; row < list->rowCount(); ++row) {
+        if (list->item(row, 2)->text() == "uart") {
+            found_uart = true;
+            RV_CHECK_STR(list->item(row, 1)->text().toStdString(), "0xffff0000");
+        }
+    }
+    RV_CHECK(found_uart);
+}
+
+RV_TEST(gui, adding_and_removing_a_peripheral_updates_the_machine) {
+    Fixture fixture;
+    core::Bus& bus = fixture.session().hart().bus();
+    const std::size_t before = bus.devices().size();
+
+    bus.attach(9, core::make_device("button"));
+    RV_CHECK_EQ(bus.devices().size(), before + 1);
+    RV_CHECK(bus.device_at_slot(9) != nullptr);
+
+    // The panel picks it up on the next refresh, which every step triggers.
+    fixture.window.step_line();
+    auto* list = fixture.window.findChild<DevicePanel*>()->findChild<QTableWidget*>();
+    RV_CHECK_EQ(list->rowCount(), static_cast<int>(before + 1));
+
+    bus.detach(9);
+    fixture.window.step_line();
+    RV_CHECK_EQ(list->rowCount(), static_cast<int>(before));
+}
+
+RV_TEST(gui, memory_can_be_edited_by_hand) {
+    // Typing a value into the memory table writes it, using the debugger's
+    // path rather than the program's -- so editing a device register does not
+    // trigger whatever a write from the program would do.
+    Fixture fixture;
+    auto* table = fixture.window.findChild<QTableWidget*>("");
+    // The memory table is the one with an "address" header.
+    QTableWidget* memory = nullptr;
+    for (QTableWidget* candidate : fixture.window.findChildren<QTableWidget*>()) {
+        if (candidate->columnCount() == 5 &&
+            candidate->horizontalHeaderItem(0)->text() == "address") {
+            memory = candidate;
+        }
+    }
+    (void)table;
+    RV_CHECK(memory != nullptr);
+    if (memory == nullptr) return;
+
+    RV_CHECK_HEX(fixture.session().read_dmem_word(0x10), 0u);
+    memory->item(1, 1)->setText("deadbeef");  // row 1 is address 0x10, column 1 is +0
+    RV_CHECK_HEX(fixture.session().read_dmem_word(0x10), 0xdeadbeefu);
+}
+
+RV_TEST(gui, a_device_configuration_round_trips_through_the_panel) {
+    Fixture fixture;
+    core::Bus& bus = fixture.session().hart().bus();
+    bus.switches()->set_value(0x1234);
+
+    const core::DeviceConfig described = core::describe(bus);
+    const std::string text = core::write_device_config(described);
+    RV_CHECK_NE(text.find("[[device]]"), std::string::npos);
+    RV_CHECK_NE(text.find("\"switches\""), std::string::npos);
+
+    const core::DeviceConfig reparsed = core::parse_device_config(text, "t.toml");
+    RV_CHECK(reparsed.ok());
+    RV_CHECK_EQ(reparsed.devices.size(), described.devices.size());
+}
+
+RV_TEST(gui, typing_ad_offers_add_and_addi_in_the_editor) {
+    // The request, end to end: type two characters and the popup appears with
+    // the instructions that start with them.
+    Fixture fixture;
+    fixture.editor().setPlainText("        ad");
+    QTextCursor cursor = fixture.editor().textCursor();
+    cursor.movePosition(QTextCursor::End);
+    fixture.editor().setTextCursor(cursor);
+
+    fixture.editor().request_completion();
+    const QStringList offered = fixture.editor().visible_completions();
+    RV_CHECK(offered.contains("add"));
+    RV_CHECK(offered.contains("addi"));
+    RV_CHECK(!offered.contains("sub"));
+}
+
+RV_TEST(gui, the_hint_bar_names_the_operand_the_caret_is_in) {
+    // The second half of the request: once an instruction is chosen, the
+    // operand shapes appear.
+    Fixture fixture;
+    const auto hint_after = [&](const char* line) {
+        fixture.editor().setPlainText(line);
+        QTextCursor cursor = fixture.editor().textCursor();
+        cursor.movePosition(QTextCursor::End);
+        fixture.editor().setTextCursor(cursor);
+        return fixture.editor().hint_bar()->text();
+    };
+
+    RV_CHECK_STR(hint_after("        addi ").toStdString(), "addi rd, rs1, imm");
+    RV_CHECK_STR(hint_after("        lw ").toStdString(), "lw rd, offset(base)");
+    RV_CHECK_STR(hint_after("        beq a0, a1, ").toStdString(), "beq rs1, rs2, label");
+
+    // Nothing to say while the mnemonic itself is still being typed.
+    RV_CHECK(hint_after("        ad").isEmpty());
+}
+
+RV_TEST(gui, completion_offers_registers_where_a_register_belongs) {
+    Fixture fixture;
+    fixture.editor().setPlainText("        addi a0, a");
+    QTextCursor cursor = fixture.editor().textCursor();
+    cursor.movePosition(QTextCursor::End);
+    fixture.editor().setTextCursor(cursor);
+
+    fixture.editor().request_completion();
+    const QStringList offered = fixture.editor().visible_completions();
+    RV_CHECK(offered.contains("a0"));
+    RV_CHECK(!offered.contains("add"));
+}
+
+RV_TEST(gui, completion_offers_the_programs_own_labels) {
+    Fixture fixture(
+        "_start: nop\n"
+        "loop:   nop\n"
+        "        ebreak\n");
+    fixture.editor().setPlainText("        beq a0, a1, lo");
+    QTextCursor cursor = fixture.editor().textCursor();
+    cursor.movePosition(QTextCursor::End);
+    fixture.editor().setTextCursor(cursor);
+
+    fixture.editor().request_completion();
+    RV_CHECK(fixture.editor().visible_completions().contains("loop"));
 }
 
 RV_TEST(gui, syntax_roles_come_from_the_assemblers_own_tables) {
