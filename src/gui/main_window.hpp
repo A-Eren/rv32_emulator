@@ -98,20 +98,11 @@ private:
     /// both ends of that comparison can move.
     void refresh_overflow();
     void on_memory_scrolled();
-    void on_memory_region_changed();
+    void on_memory_resized();
+    void sync_memory_sizes();
     void on_memory_export();
     void on_memory_load();
-    /// Keep the region list in step with what is attached.
-    void refresh_memory_regions();
 
-public:
-    /// Where the memory view is pointed: data memory, or one of the blocks.
-    /// Public so a test can say which region it is looking at without going
-    /// through a file dialog.
-    Addr memory_base() const;
-    u32 memory_size() const;
-
-private:
     void refresh_console();
 
     void refresh_symbols();
@@ -132,7 +123,8 @@ private:
     EncodingWidget* encoding_ = nullptr;
     QTableWidget* registers_ = nullptr;
     QTableWidget* memory_ = nullptr;
-    QComboBox* memory_region_ = nullptr;
+    QComboBox* imem_size_ = nullptr;
+    QComboBox* dmem_size_ = nullptr;
     DevicePanel* devices_ = nullptr;
     QPlainTextEdit* console_ = nullptr;
 

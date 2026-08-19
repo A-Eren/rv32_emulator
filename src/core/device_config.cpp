@@ -106,6 +106,13 @@ const std::vector<u32>& common_sizes(SizeUnit unit) {
     return kNone;
 }
 
+std::string memory_size_label(u32 bytes) {
+    // Below a kilobyte, say bytes. "0 KB" is not a size.
+    const std::string amount = bytes >= 1024 ? std::to_string(bytes / 1024) + " KB"
+                                             : std::to_string(bytes) + " B";
+    return amount + " \u2014 " + std::to_string(bytes / 4) + " \u00d7 32-bit";
+}
+
 std::string_view unit_name(SizeUnit unit) {
     switch (unit) {
         case SizeUnit::None: return "";
@@ -443,7 +450,7 @@ DeviceConfig describe(const Bus& bus) {
         // Inputs are the part of a device a person set, so they are what is
         // worth writing back out.
         const std::vector<InputControl> inputs = device->inputs();
-        if (!inputs.empty()) {
+        if (!inputs.empty() && inputs.front().value != 0) {
             spec.value = inputs.front().value;
             spec.has_value = true;
         }

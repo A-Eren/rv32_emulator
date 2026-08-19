@@ -37,6 +37,10 @@ enum class SizeUnit : u8 {
 /// the memory list is: this is hardware, and a width or a depth that is not one
 /// wastes what it is built from.
 const std::vector<u32>& common_sizes(SizeUnit unit);
+
+/// "16 KB - 4096 x 32-bit". Both halves matter: the bytes are what the machine
+/// has, the depth is what a block memory is ordered by.
+std::string memory_size_label(u32 bytes);
 std::string_view unit_name(SizeUnit unit);
 
 /// One entry in the catalogue of device types that can be created by name.

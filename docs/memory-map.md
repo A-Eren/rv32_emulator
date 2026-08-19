@@ -11,8 +11,8 @@ never see IMEM.
 |---|---|---|
 | `0x00000000` – … | 16 KB by default = 4096 instructions | fetch only |
 
-**The size is configurable** — the two fields beside `Add…` in the Devices
-panel, or `[machine]` in a board file. Between 256 bytes and 1 MB, a multiple
+**The size is configurable** — the two lists above the hex table on the Memory
+tab, which is what they are a view of, or `[machine]` in a board file. Between 256 bytes and 1 MB, a multiple
 of four, since both spaces are exported a word per line. Growing a memory keeps
 what was in it; shrinking one drops what no longer fits, so press F5 afterwards
 to assemble into the machine you now have.
@@ -92,9 +92,10 @@ width or a depth that is not one wastes what it is built from.
 
 ### Naming a device
 
-Any device may be given a name, and the list shows `console  (uart)` rather
-than a second row saying `uart`. Double-click the name to change it after the
-fact — what two of a kind should be called is usually only clear once both are
+Any device may be given a name. The list has a column for it, next to but
+separate from the type: a name and a type are different things, and a type is
+not a name that happens to be shared. Double-click the name to change it after
+the fact — what two of a kind should be called is usually only clear once both are
 there. Clearing the name puts the type back rather than leaving the device with
 nothing to be called.
 
@@ -321,19 +322,18 @@ panel will show it rather than round it silently.
 
 #### One block on its own
 
-The **Memory** tab has a region list across the top — data memory, and every
-`ram` or `rom` block by name and address — with **Load .mem…** and **Export
-.mem…** beside it. Picking a block points the hex view at it, which is the only
-way to see inside one: the table shows the addresses of whatever region is
-selected, and a block lives in the peripheral window rather than in dmem.
+Select a `ram` or `rom` in the Devices panel and its contents appear below it,
+as memory — the same hex table the Memory tab uses for dmem — with **Load
+.mem…** and **Export .mem…** above them. A block is looked at where it is
+configured, rather than through a list on a tab that is about something else.
 
 A block's contents are a memory image in their own right — a lookup table, a font, a sine wave — and what is
 wanted on the far side is usually that block in a BRAM of its own, not the
 program's data memory with the block somewhere inside it.
 
-That file is padded to the selected region, not to dmem: a 128-byte block
-exports 32 lines, whatever is written in it. The depth is in the region's own
-label for the same reason it is on the size lists — it is what the Block Memory
+That file is padded to the block, not to dmem: a 128-byte block exports 32
+lines, whatever is written in it. The depth is printed above the buttons for
+the same reason it is on the size lists — it is what the Block Memory
 Generator asks for.
 
 Loading is the same door in the other direction, and is how a table gets in

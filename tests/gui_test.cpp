@@ -303,7 +303,7 @@ RV_TEST(gui, the_device_panel_lists_what_is_attached) {
     // left to be worked out from the slot.
     bool found_uart = false;
     for (int row = 0; row < list->rowCount(); ++row) {
-        if (list->item(row, 2)->text() == "uart") {
+        if (list->item(row, 3)->text() == "uart") {
             found_uart = true;
             RV_CHECK_STR(list->item(row, 1)->text().toStdString(), "0xffff0000");
         }
@@ -340,7 +340,8 @@ RV_TEST(gui, memory_can_be_edited_by_hand) {
     QTableWidget* memory = nullptr;
     for (QTableWidget* candidate : fixture.window.findChildren<QTableWidget*>()) {
         if (candidate->columnCount() == 5 &&
-            candidate->horizontalHeaderItem(0)->text() == "address") {
+            candidate->horizontalHeaderItem(0)->text() == "address" &&
+            candidate->rowCount() > 100) {  // data memory, not a block's view
             memory = candidate;
         }
     }
@@ -368,7 +369,7 @@ RV_TEST(gui, operating_a_switch_does_not_destroy_the_control_operating_it) {
 
     int switches_row = -1;
     for (int row = 0; row < list->rowCount(); ++row) {
-        if (list->item(row, 2)->text() == "switches") switches_row = row;
+        if (list->item(row, 3)->text() == "switches") switches_row = row;
     }
     RV_CHECK_NE(switches_row, -1);
     if (switches_row < 0) return;
@@ -399,7 +400,7 @@ RV_TEST(gui, a_step_does_not_rebuild_the_controls_underneath_the_user) {
     auto* panel = fixture.window.findChild<DevicePanel*>();
     QTableWidget* list = panel->findChild<QTableWidget*>();
     for (int row = 0; row < list->rowCount(); ++row) {
-        if (list->item(row, 2)->text() == "switches") list->selectRow(row);
+        if (list->item(row, 3)->text() == "switches") list->selectRow(row);
     }
     QPointer<QCheckBox> box = panel->findChildren<QCheckBox*>().back();
     RV_CHECK(!box.isNull());
@@ -441,18 +442,18 @@ RV_TEST(gui, an_overlapping_device_is_allowed_and_shown_as_covered) {
     RV_CHECK_EQ(list->rowCount(), 2);
 
     // The block is only partly covered -- three of its four slots still answer.
-    RV_CHECK_NE(list->item(0, 3)->text().indexOf("partly covered"), -1);
+    RV_CHECK_NE(list->item(0, 4)->text().indexOf("partly covered"), -1);
     // The one on top reports normally -- it is the one answering.
-    RV_CHECK_EQ(list->item(1, 3)->text().indexOf("covered"), -1);
+    RV_CHECK_EQ(list->item(1, 4)->text().indexOf("covered"), -1);
 }
 
 RV_TEST(gui, the_memory_list_resizes_the_machine) {
-    // A list rather than a number to type: these are the depths a block memory
-    // comes in, and the label carries the word count that goes into the Block
-    // Memory Generator on the other side.
+    // On the memory tab, because that is what the table is a view of: changing
+    // one while looking at the other is the shortest way to see what the
+    // number means.
     Fixture fixture;
-    auto* panel = fixture.window.findChild<DevicePanel*>();
-    QList<QComboBox*> boxes = panel->findChildren<QComboBox*>();
+    fixture.window.show_tab("Memory");
+    QList<QComboBox*> boxes = fixture.window.findChildren<QComboBox*>();
     RV_CHECK_EQ(boxes.size(), 2);
     if (boxes.size() != 2) return;
 
@@ -473,10 +474,10 @@ RV_TEST(gui, a_size_a_file_names_is_shown_even_when_the_list_lacks_it) {
     // another, which is worse than an entry that is not a round number.
     Fixture fixture;
     fixture.session().hart().resize_memories(5120, 16 * 1024);
-    auto* panel = fixture.window.findChild<DevicePanel*>();
-    panel->sync_memory_fields();
+    fixture.window.show_tab("Memory");
+    fixture.window.step_line();
 
-    QComboBox* imem = panel->findChildren<QComboBox*>().front();
+    QComboBox* imem = fixture.window.findChildren<QComboBox*>().front();
     RV_CHECK_EQ(imem->currentData().toUInt(), 5120u);
     RV_CHECK_NE(imem->currentText().indexOf("1280 × 32-bit"), -1);
 }
@@ -636,59 +637,72 @@ RV_TEST(gui, a_device_can_be_renamed_after_it_exists) {
     auto* panel = fixture.window.findChild<DevicePanel*>();
     panel->refresh();
     QTableWidget* list = panel->findChild<QTableWidget*>();
+    // A name and a type are different things, so they are different columns.
+    RV_CHECK_STR(list->horizontalHeaderItem(2)->text().toStdString(), "name");
+    RV_CHECK_STR(list->horizontalHeaderItem(3)->text().toStdString(), "type");
     RV_CHECK(list->item(0, 2)->flags().testFlag(Qt::ItemIsEditable));
+    RV_CHECK(!list->item(0, 3)->flags().testFlag(Qt::ItemIsEditable));
+    RV_CHECK(list->item(0, 2)->text().isEmpty());
+    RV_CHECK_STR(list->item(0, 3)->text().toStdString(), "uart");
 
     list->item(0, 2)->setText("console");
     RV_CHECK_STR(bus.device_at_slot(0)->display_name(), "console");
-    RV_CHECK_STR(list->item(0, 2)->text().toStdString(), "console  (uart)");
+    RV_CHECK_STR(list->item(0, 3)->text().toStdString(), "uart");  // still says what it is
 
-    // Typing the type back, or nothing, means "no name" rather than a device
-    // deliberately named after its own kind.
     list->item(0, 2)->setText("");
     RV_CHECK(bus.device_at_slot(0)->label().empty());
-    RV_CHECK_STR(list->item(0, 2)->text().toStdString(), "uart");
 }
 
-RV_TEST(gui, the_memory_tab_can_look_at_a_block_as_well_as_dmem) {
-    // Before this a block was not viewable at all: the table showed data
-    // memory's addresses and a block lives in the peripheral window.
+RV_TEST(gui, a_block_is_looked_at_where_it_is_configured) {
+    // Under the device it belongs to, in the same shape the memory tab uses
+    // for data memory. Sixteen numbered fields were a list of words pretending
+    // not to be memory.
     Fixture fixture;
     core::Bus& bus = fixture.session().hart().bus();
     bus.detach_all();
     auto* ram = static_cast<core::RamDevice*>(bus.attach(0, core::make_device("ram", 64)));
-    ram->set_label("table");
-    fixture.window.show_tab("Memory");
-    fixture.window.step_line();
+    ram->poke(4, 0xdeadbeef);
 
-    QComboBox* regions = nullptr;
-    for (QComboBox* box : fixture.window.findChildren<QComboBox*>()) {
-        if (box->count() > 0 && box->itemText(0).startsWith("Data memory")) regions = box;
+    auto* panel = fixture.window.findChild<DevicePanel*>();
+    panel->refresh();
+    panel->findChild<QTableWidget*>()->selectRow(0);
+
+    // The controls hold a hex view of the block, four words to the row.
+    QTableWidget* view = nullptr;
+    for (QTableWidget* candidate : panel->findChild<QGroupBox*>()->findChildren<QTableWidget*>()) {
+        view = candidate;
     }
-    RV_CHECK(regions != nullptr);
-    if (regions == nullptr) return;
+    RV_CHECK(view != nullptr);
+    if (view == nullptr) return;
+    RV_CHECK_EQ(view->rowCount(), 4);  // 64 bytes, sixteen to a row
+    RV_CHECK_STR(view->item(0, 0)->text().toStdString(), "ffff0000");
+    RV_CHECK_STR(view->item(0, 2)->text().toStdString(), "deadbeef");
 
-    // Data memory, then the block, named and at its own address.
-    RV_CHECK_EQ(regions->count(), 2);
-    RV_CHECK_NE(regions->itemText(1).indexOf("table @ 0xffff0000"), -1);
-    RV_CHECK_NE(regions->itemText(1).indexOf("16 × 32-bit"), -1);
+    // And typing into it writes the block.
+    view->item(0, 1)->setText("00c0ffee");
+    RV_CHECK_HEX(ram->peek(0), 0x00c0ffeeu);
 }
 
-RV_TEST(gui, a_block_exports_from_the_memory_tab_at_its_own_depth) {
+RV_TEST(gui, a_block_exports_at_its_own_depth) {
     Fixture fixture;
     core::Bus& bus = fixture.session().hart().bus();
     bus.detach_all();
     auto* ram = static_cast<core::RamDevice*>(bus.attach(0, core::make_device("ram", 64)));
-    ram->set_input(0, 0xdeadbeef);
+    ram->poke(0, 0xdeadbeef);
 
-    // The region the view is pointed at is what gets written, so the file is
-    // as deep as that region rather than as deep as data memory.
-    fixture.window.show_tab("Memory");
-    fixture.window.step_line();
-    for (QComboBox* box : fixture.window.findChildren<QComboBox*>()) {
-        if (box->count() == 2 && box->itemText(0).startsWith("Data memory")) box->setCurrentIndex(1);
-    }
-    RV_CHECK_HEX(fixture.window.memory_size(), 64u);
-    RV_CHECK_HEX(fixture.window.memory_base(), 0xffff0000u);
+    auto* panel = fixture.window.findChild<DevicePanel*>();
+    const QString path = QDir::tempPath() + "/rv32_block_depth.mem";
+    QFile::remove(path);
+    RV_CHECK(panel->write_block(0, path));
+
+    QFile file(path);
+    RV_CHECK(file.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QStringList lines =
+        QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    RV_CHECK_EQ(lines.size(), 16);  // the block, not data memory
+    RV_CHECK_STR(lines.front().toStdString(), "deadbeef");
+    file.close();
+    QFile::remove(path);
 }
 
 RV_TEST(gui, a_bank_is_offered_at_the_widths_hardware_comes_in) {
@@ -709,7 +723,7 @@ RV_TEST(gui, a_bank_is_offered_at_the_widths_hardware_comes_in) {
     fixture.window.step_line();
     QTableWidget* list = fixture.window.findChild<DevicePanel*>()->findChild<QTableWidget*>();
     // Eight lights shown, not thirty-two that do not exist.
-    RV_CHECK_EQ(list->item(0, 3)->text().trimmed().size(), QString("00000000  ........").size());
+    RV_CHECK_EQ(list->item(0, 4)->text().trimmed().size(), QString("00000000  ........").size());
 }
 
 RV_TEST(gui, typing_ad_offers_add_and_addi_in_the_editor) {

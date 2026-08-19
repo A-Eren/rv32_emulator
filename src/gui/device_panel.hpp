@@ -28,9 +28,6 @@ public:
     explicit DevicePanel(dbg::DebugSession& session, QWidget* parent = nullptr);
 
     void refresh();
-    /// Put the machine's actual memory sizes back into the fields, after
-    /// something other than the fields changed them.
-    void sync_memory_fields();
     void select_row(int row);
 
     /// Load and apply a device configuration file.
@@ -43,8 +40,6 @@ public:
 signals:
     /// The set of devices changed, so anything showing addresses needs redrawing.
     void devicesChanged();
-    /// Memory was resized, which invalidates the loaded program.
-    void memoryResized();
 
     /// A control was operated. Distinct from devicesChanged because it does not
     /// invalidate addresses, only values.
@@ -52,7 +47,6 @@ signals:
 
 private slots:
     void on_add();
-    void on_memory_resized();
     void on_item_changed(QTableWidgetItem* item);
     void on_remove();
     void on_selection_changed();
@@ -89,8 +83,6 @@ private:
     QWidget* controls_ = nullptr;
     QVBoxLayout* controls_layout_ = nullptr;
     QPushButton* remove_ = nullptr;
-    QComboBox* imem_ = nullptr;
-    QComboBox* dmem_ = nullptr;
     std::string controls_built_;
     QString last_warning_;
     /// Set while the panel is writing the table itself, so its own fill is not

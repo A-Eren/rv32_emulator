@@ -95,8 +95,8 @@ broken edit never destroys the program you are already stepping.
 |---|---|
 | Registers | Both spellings (`x10  a0`), zeros dimmed, and the register the last step wrote highlighted **and scrolled into view** |
 | Encoding | The instruction as labelled bitfields, and what it did. Follows the caret, so a line explains itself before it has ever run |
-| Memory | The region picked at the top — data memory, or any `ram`/`rom` block — as deep as that region actually is. **Editable**: type a hex value into a cell. `Load .mem…` and `Export .mem…` move whole images in and out |
-| Devices | What is attached, with buttons to add and remove, the two memory sizes, and each device's own controls. **Double-click a name to rename it** |
+| Memory | Data memory, as deep as it actually is, with the two memory sizes above it — this table is what they are a view of. **Editable**: type a hex value into a cell. `Load .mem…` and `Export .mem…` move the whole image in and out |
+| Devices | What is attached, name and type in columns of their own, with each device's controls below. Select a block and its contents appear as memory, with its own `.mem` in and out. **Double-click a name to rename it** |
 | Console | Whatever the program sent to the UART |
 | Symbols | Every symbol with the **space** it lives in — the thing that explains why `call msg` was rejected |
 

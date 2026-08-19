@@ -1,5 +1,6 @@
 #include "gui/main_window.hpp"
 
+#include "core/device_config.hpp"
 #include "core/memfile.hpp"
 
 #include <QAction>
@@ -135,11 +136,27 @@ void MainWindow::build_layout() {
     auto* memory_layout = new QVBoxLayout(memory_page);
     memory_layout->setContentsMargins(4, 4, 4, 4);
     auto* memory_bar = new QHBoxLayout;
-    memory_region_ = new QComboBox(memory_page);
-    memory_region_->setFont(mono());
-    connect(memory_region_, &QComboBox::currentIndexChanged, this,
-            &MainWindow::on_memory_region_changed);
-    memory_bar->addWidget(memory_region_, 1);
+
+    // The memory sizes live here rather than with the peripherals: they are
+    // what this table is a view of, and changing one while looking at the
+    // other is the shortest way to see what the number means.
+    const auto memory_box = [this, memory_page](const char* label) {
+        auto* box = new QComboBox(memory_page);
+        for (const u32 size : core::kCommonMemorySizes) {
+            box->addItem(QString("%1  %2").arg(label,
+                                               QString::fromStdString(
+                                                   core::memory_size_label(size))),
+                         QVariant(static_cast<uint>(size)));
+        }
+        connect(box, &QComboBox::currentIndexChanged, this, &MainWindow::on_memory_resized);
+        return box;
+    };
+    imem_size_ = memory_box("imem");
+    dmem_size_ = memory_box("dmem");
+    memory_bar->addWidget(imem_size_);
+    memory_bar->addWidget(dmem_size_);
+    memory_bar->addStretch();
+
     auto* memory_load = new QPushButton("Load .mem…", memory_page);
     auto* memory_export = new QPushButton("Export .mem…", memory_page);
     connect(memory_load, &QPushButton::clicked, this, &MainWindow::on_memory_load);
@@ -155,10 +172,6 @@ void MainWindow::build_layout() {
     // Resizing a memory throws away what no longer fits, so the program that
     // was loaded is no longer necessarily the program in imem. Say so rather
     // than let the next step run off the end of a truncated one.
-    connect(devices_, &DevicePanel::memoryResized, this, [this] {
-        status_->setText("Memory resized — press F5 to assemble into the new machine.");
-        refresh_all();
-    });
 
     symbols_ = new QTableWidget(0, 4, this);
     symbols_->setHorizontalHeaderLabels({"name", "space", "value", "line"});
@@ -564,77 +577,51 @@ void MainWindow::refresh_overflow() {
     if (data_overflows && !code_overflows) set_message(reason, true);
 }
 
-void MainWindow::refresh_memory_regions() {
-    QStringList wanted;
-    QList<QVariant> keys;
-    wanted << QString("Data memory — %1 × 32-bit")
-                  .arg(session_->hart().bus().dmem().size() / 4);
-    keys << QVariant(-1);
-    for (core::Device* device : session_->hart().bus().devices()) {
-        const auto* ram = dynamic_cast<const core::RamDevice*>(device);
-        if (ram == nullptr) continue;
-        wanted << QString("%1 @ 0x%2 — %3 × 32-bit")
-                      .arg(QString::fromStdString(device->display_name()))
-                      .arg(device->base_address(), 8, 16, QLatin1Char('0'))
-                      .arg(ram->size() / 4);
-        keys << QVariant(static_cast<int>(device->slot()));
-    }
+void MainWindow::sync_memory_sizes() {
+    const auto select = [](QComboBox* box, u32 size, const char* label) {
+        const QSignalBlocker blocker(box);
+        const int found = box->findData(QVariant(static_cast<uint>(size)));
+        if (found >= 0) {
+            box->setCurrentIndex(found);
+            return;
+        }
+        // A board file may name a size the list does not offer. Showing it is
+        // the only honest thing to do; the alternative is a box that says one
+        // size while the machine has another.
+        box->addItem(
+            QString("%1  %2").arg(label, QString::fromStdString(core::memory_size_label(size))),
+            QVariant(static_cast<uint>(size)));
+        box->setCurrentIndex(box->count() - 1);
+    };
+    select(imem_size_, session_->hart().imem().size(), "imem");
+    select(dmem_size_, session_->hart().bus().dmem().size(), "dmem");
+}
 
-    QStringList current;
-    for (int index = 0; index < memory_region_->count(); ++index) {
-        current << memory_region_->itemText(index);
-    }
-    if (current == wanted) return;
-
-    const QVariant was = memory_region_->currentData();
-    const QSignalBlocker blocker(memory_region_);
-    memory_region_->clear();
-    for (int index = 0; index < wanted.size(); ++index) {
-        memory_region_->addItem(wanted[index], keys[index]);
-    }
-    const int restored = memory_region_->findData(was);
-    memory_region_->setCurrentIndex(restored >= 0 ? restored : 0);
+void MainWindow::on_memory_resized() {
+    session_->hart().resize_memories(imem_size_->currentData().toUInt(),
+                                     dmem_size_->currentData().toUInt());
+    sync_memory_sizes();
     memory_rows_filled_ = -1;
-}
-
-Addr MainWindow::memory_base() const {
-    if (memory_region_ == nullptr) return 0;
-    const int slot = memory_region_->currentData().toInt();
-    if (slot < 0) return 0;
-    const core::Device* device = session_->hart().bus().device_at_slot(
-        static_cast<std::size_t>(slot));
-    return device != nullptr ? device->base_address() : 0;
-}
-
-u32 MainWindow::memory_size() const {
-    if (memory_region_ == nullptr) return session_->hart().bus().dmem().size();
-    const int slot = memory_region_->currentData().toInt();
-    if (slot < 0) return session_->hart().bus().dmem().size();
-    const auto* ram = dynamic_cast<const core::RamDevice*>(
-        session_->hart().bus().device_at_slot(static_cast<std::size_t>(slot)));
-    return ram != nullptr ? ram->size() : 0;
-}
-
-void MainWindow::on_memory_region_changed() {
-    memory_rows_filled_ = -1;
-    refresh_memory();
+    // Resizing throws away what no longer fits, so the program that was loaded
+    // is no longer necessarily the program in imem.
+    set_message("memory resized — press F5 to assemble into the new machine");
+    refresh_all();
 }
 
 void MainWindow::on_memory_export() {
-    const QString path = QFileDialog::getSaveFileName(this, "Export memory image",
+    const QString path = QFileDialog::getSaveFileName(this, "Export data memory",
                                                       QDir::currentPath(), "Memory image (*.mem)");
     if (path.isEmpty()) return;
 
-    const Addr base = memory_base();
-    const u32 size = memory_size();
+    const u32 size = session_->hart().bus().dmem().size();
     std::vector<Word> words;
     words.reserve(size / 4);
     for (u32 offset = 0; offset < size; offset += 4) {
-        words.push_back(session_->read_dmem_word(base + offset));
+        words.push_back(session_->read_dmem_word(offset));
     }
 
     core::MemFileOptions options;
-    // Padded to the region, which is the point: the file is this memory, so it
+    // Padded to the memory, which is the point: the file is this memory, so it
     // is as deep as this memory whatever is written in it.
     options.pad_to_full = true;
     options.full_size = size / 4;
@@ -644,13 +631,12 @@ void MainWindow::on_memory_export() {
         QMessageBox::warning(this, "rv32", QString::fromStdString(result.error));
         return;
     }
-    set_message(QString("wrote %1 — %2 × 32-bit")
-                    .arg(QFileInfo(path).fileName())
-                    .arg(size / 4));
+    set_message(
+        QString("wrote %1 — %2 × 32-bit").arg(QFileInfo(path).fileName()).arg(size / 4));
 }
 
 void MainWindow::on_memory_load() {
-    const QString path = QFileDialog::getOpenFileName(this, "Load memory image",
+    const QString path = QFileDialog::getOpenFileName(this, "Load data memory",
                                                       QDir::currentPath(), "Memory image (*.mem)");
     if (path.isEmpty()) return;
 
@@ -661,17 +647,16 @@ void MainWindow::on_memory_load() {
         return;
     }
 
-    const Addr base = memory_base();
-    const u32 size = memory_size();
+    const u32 size = session_->hart().bus().dmem().size();
     const bool truncated = words.size() * 4 > size;
     if (truncated) words.resize(size / 4);
     for (std::size_t index = 0; index < words.size(); ++index) {
-        session_->hart().bus().poke_word(base + static_cast<Addr>(index * 4), words[index]);
+        session_->hart().bus().poke_word(static_cast<Addr>(index * 4), words[index]);
     }
 
     memory_rows_filled_ = -1;
     refresh_all();
-    set_message(truncated ? QString("%1 is longer than this memory; the rest was not read")
+    set_message(truncated ? QString("%1 is longer than data memory; the rest was not read")
                                 .arg(QFileInfo(path).fileName())
                           : QString("read %1 words from %2")
                                 .arg(words.size())
@@ -684,9 +669,12 @@ void MainWindow::refresh_memory() {
     // dmem size means on screen: shrink it and the view stops where the
     // machine does, rather than scrolling on into addresses that read as zero
     // because nothing is there to say otherwise.
-    refresh_memory_regions();
-    const Addr base = memory_base();
-    const u32 region_bytes = memory_size();
+    sync_memory_sizes();
+    // Always data memory. A block is looked at where it is configured, under
+    // the device it belongs to, rather than through a list on a tab that is
+    // about something else.
+    const Addr base = 0;
+    const u32 region_bytes = session_->hart().bus().dmem().size();
     const int rows = static_cast<int>(region_bytes / 16);
     if (memory_->rowCount() != rows) {
         const QSignalBlocker resize_blocker(memory_);
@@ -752,8 +740,7 @@ void MainWindow::on_memory_edited(int row, int column) {
         return;
     }
 
-    const Addr address =
-        memory_base() + static_cast<Addr>(row) * 16 + static_cast<Addr>((column - 1) * 4);
+    const Addr address = static_cast<Addr>(row) * 16 + static_cast<Addr>((column - 1) * 4);
     // poke rather than store: this is the debugger writing, so it must not
     // trigger whatever a device would do on a write from the program.
     session_->hart().bus().poke_word(address, value);

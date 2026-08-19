@@ -29,18 +29,11 @@
 namespace rv::gui {
 namespace {
 
-/// "16 KB — 4096 x 32-bit". Both halves matter: the bytes are what the
-/// machine has, the depth is what a block memory is ordered by.
-QString memory_size_label(u32 bytes) {
-    // Below a kilobyte, say bytes. "0 KB" is not a size.
-    const QString amount =
-        bytes >= 1024 ? QString("%1 KB").arg(bytes / 1024) : QString("%1 B").arg(bytes);
-    return QString("%1 — %2 × 32-bit").arg(amount).arg(bytes / 4);
-}
-
-/// The column holding the device's name, which is the one that can be typed
-/// into. Double-clicking it renames the device.
+/// The device list's columns. The name has one of its own: a name and a type
+/// are different things, and a type is not a name that happens to be shared.
 constexpr int kNameColumn = 2;
+constexpr int kTypeColumn = 3;
+constexpr int kStateColumn = 4;
 
 QFont mono(int size = 10) {
     QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
@@ -214,15 +207,15 @@ DevicePanel::DevicePanel(dbg::DebugSession& session, QWidget* parent)
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(4, 4, 4, 4);
 
-    list_ = new QTableWidget(0, 4, this);
-    list_->setHorizontalHeaderLabels({"slot", "address", "type", "state"});
+    list_ = new QTableWidget(0, 5, this);
+    list_->setHorizontalHeaderLabels({"slot", "address", "name", "type", "state"});
     list_->verticalHeader()->setVisible(false);
     list_->setEditTriggers(QAbstractItemView::DoubleClicked |
                            QAbstractItemView::EditKeyPressed);
     list_->setSelectionBehavior(QAbstractItemView::SelectRows);
     list_->setSelectionMode(QAbstractItemView::SingleSelection);
     list_->setFont(mono());
-    list_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    list_->horizontalHeader()->setSectionResizeMode(kStateColumn, QHeaderView::Stretch);
     connect(list_, &QTableWidget::itemSelectionChanged, this,
             &DevicePanel::on_selection_changed);
     // Renaming after the fact, not only when adding: what two of a kind should
@@ -240,27 +233,6 @@ DevicePanel::DevicePanel(dbg::DebugSession& session, QWidget* parent)
     buttons->addWidget(remove_);
     buttons->addStretch();
 
-    // The two memories are part of the machine in the same way the peripherals
-    // are, so they are configured in the same place. Both spaces are exported a
-    // word per line, which is why the step is four bytes.
-    // A list rather than a number to type, and labelled by depth in words as
-    // well as bytes: a block memory is configured by how many words deep it
-    // is, so the label is the number that goes into the Block Memory Generator
-    // beside the .mem file this exports.
-    const auto memory_box = [this](const char* label) {
-        auto* box = new QComboBox(this);
-        for (const u32 size : core::kCommonMemorySizes) {
-            box->addItem(QString("%1  %2").arg(label, memory_size_label(size)),
-                         QVariant(static_cast<uint>(size)));
-        }
-        return box;
-    };
-    imem_ = memory_box("imem");
-    dmem_ = memory_box("dmem");
-    buttons->addWidget(imem_);
-    buttons->addWidget(dmem_);
-    connect(imem_, &QComboBox::currentIndexChanged, this, &DevicePanel::on_memory_resized);
-    connect(dmem_, &QComboBox::currentIndexChanged, this, &DevicePanel::on_memory_resized);
     layout->addLayout(buttons);
 
     // Scrollable, because a block offers sixteen fields and a row of buttons
@@ -276,34 +248,7 @@ DevicePanel::DevicePanel(dbg::DebugSession& session, QWidget* parent)
     scroll->setFrameShape(QFrame::NoFrame);
     layout->addWidget(scroll, 1);
 
-    sync_memory_fields();
     refresh();
-}
-
-void DevicePanel::sync_memory_fields() {
-    const auto select = [](QComboBox* box, u32 size, const char* label) {
-        const QSignalBlocker block(box);
-        const int found = box->findData(QVariant(static_cast<uint>(size)));
-        if (found >= 0) {
-            box->setCurrentIndex(found);
-            return;
-        }
-        // A file may name a size the list does not offer. Showing it is the
-        // only honest thing to do -- the alternative is a box that says one
-        // size while the machine has another.
-        box->addItem(QString("%1  %2").arg(label, memory_size_label(size)),
-                     QVariant(static_cast<uint>(size)));
-        box->setCurrentIndex(box->count() - 1);
-    };
-    select(imem_, session_->hart().imem().size(), "imem");
-    select(dmem_, session_->hart().bus().dmem().size(), "dmem");
-}
-
-void DevicePanel::on_memory_resized() {
-    session_->hart().resize_memories(imem_->currentData().toUInt(),
-                                     dmem_->currentData().toUInt());
-    sync_memory_fields();
-    emit memoryResized();
 }
 
 void DevicePanel::refresh() {
@@ -345,17 +290,9 @@ void DevicePanel::on_item_changed(QTableWidgetItem* item) {
     const auto row = static_cast<std::size_t>(item->row());
     if (row >= devices.size()) return;
 
-    // Typed empty means "no name", which puts the type back rather than
-    // leaving a device with nothing to be called.
-    QString typed = item->text().trimmed();
-    const QString type = QString::fromUtf8(devices[row]->type_name().data(),
-                                           static_cast<int>(devices[row]->type_name().size()));
-    // Tolerate the "name  (type)" the cell was showing being edited in place.
-    const int tail = typed.indexOf("  (");
-    if (tail >= 0) typed = typed.left(tail).trimmed();
-    if (typed == type) typed.clear();
-
-    devices[row]->set_label(typed.toStdString());
+    // Empty means "no name". The type is in the next column and does not need
+    // to be repeated here.
+    devices[row]->set_label(item->text().trimmed().toStdString());
     controls_built_.clear();  // the name is on screen in the controls too
     refresh();
     emit devicesChanged();
@@ -375,16 +312,9 @@ void DevicePanel::refresh_list() {
         QStringList cells = {
             QString::number(device->slot()),
             QString::asprintf("0x%08x", device->base_address()),
-            // The name when it has one, with the type in tow: a machine with
-            // two UARTs needs to say which is which, and a machine with one
-            // does not need to be told twice what it is.
-            device->label().empty()
-                ? QString::fromUtf8(device->type_name().data(),
-                                    static_cast<int>(device->type_name().size()))
-                : QString("%1  (%2)")
-                      .arg(QString::fromStdString(device->label()),
-                           QString::fromUtf8(device->type_name().data(),
-                                             static_cast<int>(device->type_name().size()))),
+            QString::fromStdString(device->label()),
+            QString::fromUtf8(device->type_name().data(),
+                              static_cast<int>(device->type_name().size())),
             QString::fromStdString(device->state_summary()),
         };
         // A device nothing resolves to is still attached and still worth
@@ -393,9 +323,9 @@ void DevicePanel::refresh_list() {
         const std::size_t reachable = session_->hart().bus().reachable_slots(device);
         const std::size_t span = std::max<std::size_t>(1, device->slot_count());
         if (reachable == 0) {
-            cells[3] = "covered by another device";
+            cells[kStateColumn] = "covered by another device";
         } else if (reachable < span) {
-            cells[3] += QString("  (partly covered)");
+            cells[kStateColumn] += QString("  (partly covered)");
         }
         for (int column = 0; column < cells.size(); ++column) {
             QTableWidgetItem* item = list_->item(row, column);
@@ -413,7 +343,7 @@ void DevicePanel::refresh_list() {
     }
     if (selected >= 0 && selected < list_->rowCount()) list_->selectRow(selected);
     list_->resizeColumnsToContents();
-    list_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    list_->horizontalHeader()->setSectionResizeMode(kStateColumn, QHeaderView::Stretch);
     filling_ = false;
 }
 
@@ -421,16 +351,75 @@ void DevicePanel::add_block_row(std::size_t slot) {
     auto* ram = dynamic_cast<core::RamDevice*>(session_->hart().bus().device_at_slot(slot));
     if (ram == nullptr) return;
 
-    auto* row_widget = new QWidget(controls_);
-    auto* line = new QHBoxLayout(row_widget);
+    auto* header = new QWidget(controls_);
+    auto* line = new QHBoxLayout(header);
     line->setContentsMargins(0, 0, 0, 0);
-    line->addWidget(new QLabel(QString("%1 × 32-bit").arg(ram->size() / 4), row_widget));
+    auto* depth = new QLabel(QString::fromStdString(core::memory_size_label(ram->size())), header);
+    depth->setStyleSheet("color: #7d8590;");
+    line->addWidget(depth);
     line->addStretch();
 
-    auto* note = new QLabel("images move in and out on the Memory tab", row_widget);
-    note->setStyleSheet("color: #7d8590;");
-    line->addWidget(note);
-    controls_layout_->addWidget(row_widget);
+    auto* load = new QPushButton("Load .mem…", header);
+    auto* save = new QPushButton("Export .mem…", header);
+    line->addWidget(load);
+    line->addWidget(save);
+    controls_layout_->addWidget(header);
+    connect(save, &QPushButton::clicked, this, [this, slot] { export_block(slot); });
+    connect(load, &QPushButton::clicked, this, [this, slot] { load_block(slot); });
+
+    // The block's own contents, in the same shape the memory tab uses for data
+    // memory. Sixteen numbered fields were a list of words pretending not to
+    // be memory; this is memory, and it is here rather than on the memory tab
+    // because a block is looked at where it is configured.
+    auto* view = new QTableWidget(static_cast<int>(ram->size() / 16), 5, controls_);
+    view->setHorizontalHeaderLabels({"address", "+0", "+4", "+8", "+c"});
+    view->verticalHeader()->setVisible(false);
+    view->setFont(mono());
+    view->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    view->verticalHeader()->setDefaultSectionSize(QFontMetrics(mono()).height() + 4);
+    view->setSelectionBehavior(QAbstractItemView::SelectItems);
+
+    const Addr base = ram->base_address();
+    for (int row = 0; row < view->rowCount(); ++row) {
+        const auto set = [&](int column, const QString& text, bool editable) {
+            auto* item = new QTableWidgetItem(text);
+            item->setFlags(editable
+                               ? (Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable)
+                               : (Qt::ItemIsEnabled | Qt::ItemIsSelectable));
+            view->setItem(row, column, item);
+        };
+        set(0, QString::asprintf("%08x", base + static_cast<Addr>(row) * 16), false);
+        for (int index = 0; index < 4; ++index) {
+            set(index + 1,
+                QString::asprintf("%08x", ram->peek(static_cast<u32>(row) * 16 +
+                                                    static_cast<u32>(index) * 4)),
+                true);
+        }
+    }
+
+    connect(view, &QTableWidget::cellChanged, this, [this, slot, view](int row, int column) {
+        if (column < 1 || column > 4) return;
+        auto* block = dynamic_cast<core::RamDevice*>(session_->hart().bus().device_at_slot(slot));
+        if (block == nullptr) return;
+        QTableWidgetItem* item = view->item(row, column);
+        if (item == nullptr) return;
+
+        bool valid = false;
+        const u32 value = item->text().trimmed().toUInt(&valid, 16);
+        if (!valid) {
+            // Put back what is actually there rather than leaving the cell
+            // showing something the block does not hold.
+            const QSignalBlocker blocker(view);
+            item->setText(QString::asprintf(
+                "%08x", block->peek(static_cast<u32>(row) * 16 + static_cast<u32>(column - 1) * 4)));
+            return;
+        }
+        block->set_input(static_cast<std::size_t>(row) * 4 + static_cast<std::size_t>(column - 1),
+                         value);
+        refresh_list();
+        emit inputChanged();
+    });
+    controls_layout_->addWidget(view, 1);
 }
 
 void DevicePanel::export_block(std::size_t slot) {
@@ -543,7 +532,11 @@ void DevicePanel::rebuild_controls() {
     // memory image in their own right -- a table, a font, a sine wave -- and
     // what you want on the far side is that block loaded into a BRAM of its
     // own, not the program's data memory with the block somewhere inside it.
-    if (dynamic_cast<core::RamDevice*>(device) != nullptr) add_block_row(slot);
+    if (dynamic_cast<core::RamDevice*>(device) != nullptr) {
+        add_block_row(slot);
+        controls_layout_->addStretch();
+        return;
+    }
 
     const std::vector<core::InputControl> inputs = device->inputs();
     if (inputs.empty()) {
@@ -729,7 +722,6 @@ bool DevicePanel::load_config(const QString& path) {
     QStringList lines;
     for (const std::string& warning : warnings) lines << QString::fromStdString(warning);
     last_warning_ = lines.join("; ");
-    sync_memory_fields();
     rebuild_controls();
     refresh();
     emit devicesChanged();
