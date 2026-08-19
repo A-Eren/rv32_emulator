@@ -1,15 +1,25 @@
 #include "gui/main_window.hpp"
 
+#include "core/memfile.hpp"
+
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFontDatabase>
+#include <QFormLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QPushButton>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTabWidget>
@@ -182,6 +192,9 @@ void MainWindow::build_actions() {
     file_menu->addSeparator();
     file_menu->addAction("Load &peripherals…", this, &MainWindow::on_load_devices);
     file_menu->addAction("Save p&eripherals…", this, &MainWindow::on_save_devices);
+    file_menu->addSeparator();
+    file_menu->addAction("&Export .mem…", QKeySequence("Ctrl+E"), this,
+                         &MainWindow::on_export_mem);
     file_menu->addSeparator();
     file_menu->addAction("&Quit", QKeySequence::Quit, this, &QWidget::close);
 
@@ -677,6 +690,131 @@ void MainWindow::on_cursor_moved() {
         set_message(from(diagnostic->message), diagnostic->severity == as::Severity::Error);
     }
     refresh_status();
+}
+
+namespace {
+
+/// Where the .mem files go and what they are called. It shows the depth of
+/// each image beside it, because that is the number the Block Memory Generator
+/// asks for on the other side -- getting it wrong is the mistake that produces
+/// a memory full of the right words in the wrong places.
+class ExportMemDialog final : public QDialog {
+public:
+    ExportMemDialog(QWidget* parent, u32 imem_bytes, u32 dmem_bytes)
+        : QDialog(parent), imem_bytes_(imem_bytes), dmem_bytes_(dmem_bytes) {
+        setWindowTitle("Export .mem");
+        auto* form = new QFormLayout(this);
+
+        folder_ = new QLineEdit(QDir::currentPath(), this);
+        auto* browse = new QPushButton("Browse…", this);
+        connect(browse, &QPushButton::clicked, this, [this] {
+            const QString picked =
+                QFileDialog::getExistingDirectory(this, "Export to", folder_->text());
+            if (!picked.isEmpty()) folder_->setText(picked);
+        });
+        auto* folder_row = new QHBoxLayout;
+        folder_row->addWidget(folder_, 1);
+        folder_row->addWidget(browse);
+        form->addRow("Folder", folder_row);
+
+        base_ = new QLineEdit("rv32", this);
+        form->addRow("Base name", base_);
+
+        imem_ = new QCheckBox(QString("imem  —  %1 × 32-bit").arg(imem_bytes / 4), this);
+        dmem_ = new QCheckBox(QString("dmem  —  %1 × 32-bit").arg(dmem_bytes / 4), this);
+        imem_->setChecked(true);
+        dmem_->setChecked(true);
+        form->addRow("Write", imem_);
+        form->addRow("", dmem_);
+
+        annotate_ = new QCheckBox("comment each imem word with its disassembly", this);
+        form->addRow("", annotate_);
+
+        auto* note = new QLabel(
+            "Each file is padded to the full depth, so $readmemh fills the whole "
+            "array and nothing is left holding whatever the tool put there.",
+            this);
+        note->setWordWrap(true);
+        note->setStyleSheet("color: #7d8590;");
+        form->addRow("", note);
+
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+        buttons->button(QDialogButtonBox::Ok)->setText("Export");
+        connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+        connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+        form->addRow(buttons);
+    }
+
+    QString imem_path() const { return path_for("imem"); }
+    QString dmem_path() const { return path_for("dmem"); }
+    bool wants_imem() const { return imem_->isChecked(); }
+    bool wants_dmem() const { return dmem_->isChecked(); }
+    bool annotate() const { return annotate_->isChecked(); }
+
+private:
+    QString path_for(const char* which) const {
+        return QDir(folder_->text()).filePath(base_->text() + "_" + which + ".mem");
+    }
+
+    u32 imem_bytes_;
+    u32 dmem_bytes_;
+    QLineEdit* folder_ = nullptr;
+    QLineEdit* base_ = nullptr;
+    QCheckBox* imem_ = nullptr;
+    QCheckBox* dmem_ = nullptr;
+    QCheckBox* annotate_ = nullptr;
+};
+
+}  // namespace
+
+void MainWindow::on_export_mem() {
+    if (!session_->has_program()) {
+        set_message("nothing to export — press F5 to assemble first");
+        return;
+    }
+
+    const u32 imem_bytes = session_->hart().imem().size();
+    const u32 dmem_bytes = session_->hart().bus().dmem().size();
+    ExportMemDialog dialog(this, imem_bytes, dmem_bytes);
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    const as::AssembledProgram& program = session_->program();
+    QStringList written;
+
+    core::MemFileOptions options;
+    // Always padded. A .mem shorter than the array it loads into leaves the
+    // tail holding whatever the tool put there, and that is the class of bug
+    // that looks like the program going wrong rather than the file being short.
+    options.pad_to_full = true;
+
+    if (dialog.wants_imem()) {
+        options.full_size = imem_bytes / 4;
+        options.annotate = dialog.annotate();
+        const core::MemFileResult result =
+            core::write_mem_file(dialog.imem_path().toStdString(), program.imem_words, options);
+        if (!result.ok) {
+            QMessageBox::warning(this, "rv32", QString::fromStdString(result.error));
+            return;
+        }
+        written << QFileInfo(dialog.imem_path()).fileName();
+    }
+
+    if (dialog.wants_dmem()) {
+        options.full_size = dmem_bytes / 4;
+        options.annotate = false;  // disassembling data would be nonsense
+        const std::vector<Word> words = core::pack_bytes_to_words(program.dmem_bytes);
+        const core::MemFileResult result =
+            core::write_mem_file(dialog.dmem_path().toStdString(), words, options);
+        if (!result.ok) {
+            QMessageBox::warning(this, "rv32", QString::fromStdString(result.error));
+            return;
+        }
+        written << QFileInfo(dialog.dmem_path()).fileName();
+    }
+
+    set_message(written.isEmpty() ? "nothing selected to export"
+                                  : "wrote " + written.join(" and ") + " to " +
+                                        QFileInfo(dialog.imem_path()).path());
 }
 
 }  // namespace rv::gui

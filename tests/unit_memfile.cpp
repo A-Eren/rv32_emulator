@@ -1,5 +1,9 @@
 // The $readmemh export format.
 #include "core/memfile.hpp"
+
+#include <algorithm>
+
+#include "core/device_config.hpp"
 #include "rv_test.hpp"
 
 using namespace rv;
@@ -84,4 +88,38 @@ RV_TEST(memfile, annotated_output_carries_the_disassembly) {
     const std::string text = render_mem_file({0x00500093u}, options);
     RV_CHECK_NE(text.find("addi"), std::string::npos);
     RV_CHECK_NE(text.find("00500093"), std::string::npos);
+}
+
+RV_TEST(memfile, a_padded_image_is_exactly_as_deep_as_the_memory) {
+    // What this is for: the file is loaded into an array of a fixed depth by
+    // $readmemh. A file shorter than the array leaves its tail holding
+    // whatever the tool put there, and that reads as the program going wrong
+    // rather than as the file being short.
+    const std::vector<Word> program = {0x00a00413, 0x00000293};
+
+    core::MemFileOptions options;
+    options.pad_to_full = true;
+    options.full_size = 8192 / 4;  // an 8 KB machine
+
+    const std::string text = core::render_mem_file(program, options);
+    RV_CHECK_EQ(std::count(text.begin(), text.end(), '\n'), 2048);
+
+    // The program is at the front and the rest is zero, which is what a memory
+    // that has not been written holds.
+    RV_CHECK_EQ(text.compare(0, 8, "00a00413"), 0);
+    RV_CHECK_NE(text.rfind("00000000\n"), std::string::npos);
+}
+
+RV_TEST(memfile, the_depth_is_the_word_count_the_size_list_advertises) {
+    // The label in the panel says "16 KB - 4096 x 32-bit"; that 4096 is the
+    // depth to configure a block memory with, and it has to be the number of
+    // lines this writes.
+    for (const u32 bytes : core::kCommonMemorySizes) {
+        core::MemFileOptions options;
+        options.pad_to_full = true;
+        options.full_size = bytes / 4;
+        const std::string text = core::render_mem_file({}, options);
+        RV_CHECK_EQ(static_cast<std::size_t>(std::count(text.begin(), text.end(), '\n')),
+                    std::size_t{bytes / 4});
+    }
 }

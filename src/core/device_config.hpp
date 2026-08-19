@@ -75,6 +75,15 @@ struct DeviceConfig {
 inline constexpr u32 kMinMemorySize = 256;
 inline constexpr u32 kMaxMemorySize = 1u << 20;
 
+/// The sizes offered as a list, rather than as a number to type. These are the
+/// depths a block memory actually comes in: a BRAM is configured by how many
+/// words deep it is, and a depth that is not a power of two wastes a whole
+/// block. Anything else is still accepted from a file -- the list is what is
+/// worth offering, not what is allowed.
+inline constexpr u32 kCommonMemorySizes[] = {
+    1u << 10, 1u << 11, 1u << 12, 1u << 13, 1u << 14, 1u << 15, 1u << 16,
+};
+
 /// The directory part of a path, which is what `load = "..."` entries are
 /// resolved against -- a configuration should refer to its images relative to
 /// itself, so a directory can be moved or shared whole.

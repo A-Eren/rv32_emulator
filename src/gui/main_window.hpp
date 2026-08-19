@@ -70,6 +70,7 @@ private slots:
     void on_cursor_moved();
     void on_memory_edited(int row, int column);
     void on_load_devices();
+    void on_export_mem();
     void on_save_devices();
     void on_run_slice();
 

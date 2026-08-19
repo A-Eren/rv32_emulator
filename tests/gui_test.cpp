@@ -10,6 +10,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QListWidget>
+#include <QComboBox>
 #include <QGroupBox>
 #include <QLineEdit>
 #include <QPointer>
@@ -441,17 +442,39 @@ RV_TEST(gui, an_overlapping_device_is_allowed_and_shown_as_covered) {
     RV_CHECK_EQ(list->item(1, 3)->text().indexOf("covered"), -1);
 }
 
-RV_TEST(gui, the_memory_fields_resize_the_machine) {
+RV_TEST(gui, the_memory_list_resizes_the_machine) {
+    // A list rather than a number to type: these are the depths a block memory
+    // comes in, and the label carries the word count that goes into the Block
+    // Memory Generator on the other side.
     Fixture fixture;
     auto* panel = fixture.window.findChild<DevicePanel*>();
-    QList<QSpinBox*> boxes = panel->findChildren<QSpinBox*>();
+    QList<QComboBox*> boxes = panel->findChildren<QComboBox*>();
     RV_CHECK_EQ(boxes.size(), 2);
     if (boxes.size() != 2) return;
 
-    boxes[0]->setValue(8192);
+    RV_CHECK_NE(boxes[0]->currentText().indexOf("× 32-bit"), -1);
+
+    const int eight_kb = boxes[0]->findData(QVariant(uint{8192}));
+    RV_CHECK_NE(eight_kb, -1);
+    boxes[0]->setCurrentIndex(eight_kb);
     RV_CHECK_EQ(fixture.session().hart().imem().size(), 8192u);
-    boxes[1]->setValue(4096);
+
+    const int four_kb = boxes[1]->findData(QVariant(uint{4096}));
+    boxes[1]->setCurrentIndex(four_kb);
     RV_CHECK_EQ(fixture.session().hart().bus().dmem().size(), 4096u);
+}
+
+RV_TEST(gui, a_size_a_file_names_is_shown_even_when_the_list_lacks_it) {
+    // The alternative is a box that says one size while the machine has
+    // another, which is worse than an entry that is not a round number.
+    Fixture fixture;
+    fixture.session().hart().resize_memories(5120, 16 * 1024);
+    auto* panel = fixture.window.findChild<DevicePanel*>();
+    panel->sync_memory_fields();
+
+    QComboBox* imem = panel->findChildren<QComboBox*>().front();
+    RV_CHECK_EQ(imem->currentData().toUInt(), 5120u);
+    RV_CHECK_NE(imem->currentText().indexOf("1280 × 32-bit"), -1);
 }
 
 RV_TEST(gui, a_block_and_a_custom_peripheral_get_fields_to_type_into) {

@@ -18,6 +18,7 @@
 #include "cmd/repl.hpp"
 #include "asm/diag_render.hpp"
 #include "core/hart.hpp"
+#include "core/device_config.hpp"
 #include "core/memfile.hpp"
 #include "isa/disasm.hpp"
 #include "isa/regnames.hpp"
@@ -47,6 +48,7 @@ void print_usage() {
         "  -o <file>             instruction image to write (default imem.mem)\n"
         "  --dmem <file>         data image to write or load (default dmem.mem)\n"
         "  --pad                 emit the full memory array, not just what is used\n"
+        "  --board <file.toml>   take the memory sizes --pad pads to from a machine\n"
         "  --annotate            add disassembly comments to the .mem output\n"
         "  --strict-word-mem     warn on sub-word loads and stores\n"
         "  --trace               print each instruction as it executes\n"
@@ -68,6 +70,10 @@ struct Options {
     /// Emit the teaching notes (the 'la' sizing explanation). Useful while
     /// learning, pure noise in a test runner.
     bool explain = true;
+    /// A machine description, which is where the memory sizes come from. What
+    /// --pad pads to has to be the size of the array the file will be loaded
+    /// into, and that is a property of the machine rather than of this run.
+    std::string board;
     std::vector<std::string> positional;
 };
 
@@ -87,7 +93,7 @@ bool parse_options(const std::vector<std::string>& args, Options& out) {
             out.annotate = true;
                 } else if (arg == "--strict-word-mem") {
             out.strict_word_mem = true;
-        } else if (arg == "--limit" || arg == "--dmem" || arg == "-o") {
+        } else if (arg == "--limit" || arg == "--dmem" || arg == "-o" || arg == "--board") {
             if (i + 1 >= args.size()) {
                 std::fprintf(stderr, "rv32: %s needs a value\n", arg.c_str());
                 return false;
@@ -96,6 +102,8 @@ bool parse_options(const std::vector<std::string>& args, Options& out) {
                 out.limit = std::strtoull(args[++i].c_str(), nullptr, 0);
             } else if (arg == "-o") {
                 out.output_path = args[++i];
+            } else if (arg == "--board") {
+                out.board = args[++i];
             } else {
                 out.dmem_path = args[++i];
             }
@@ -225,11 +233,25 @@ int command_asm(const std::vector<std::string>& args) {
     const std::string imem_path = options.output_path.empty() ? "imem.mem" : options.output_path;
     const std::string dmem_path = options.dmem_path.empty() ? "dmem.mem" : options.dmem_path;
 
+    // The depths to pad to. A board file names them; without one they are what
+    // a machine has by default.
+    u32 imem_bytes = core::kDefaultImemSize;
+    u32 dmem_bytes = core::kDefaultDmemSize;
+    if (!options.board.empty()) {
+        const core::DeviceConfig board = core::read_device_config(options.board);
+        if (!board.ok()) {
+            std::fprintf(stderr, "rv32: %s\n", board.error.c_str());
+            return 1;
+        }
+        if (board.imem_size != 0) imem_bytes = board.imem_size;
+        if (board.dmem_size != 0) dmem_bytes = board.dmem_size;
+    }
+
     core::MemFileOptions mem_options;
     mem_options.pad_to_full = options.pad;
     mem_options.annotate = options.annotate;
 
-    mem_options.full_size = core::kDefaultImemSize / 4;
+    mem_options.full_size = imem_bytes / 4;
     if (const core::MemFileResult result =
             core::write_mem_file(imem_path, program.imem_words, mem_options);
         !result.ok) {
@@ -238,7 +260,7 @@ int command_asm(const std::vector<std::string>& args) {
     }
 
     const std::vector<Word> dmem_words = core::pack_bytes_to_words(program.dmem_bytes);
-    mem_options.full_size = core::kDefaultDmemSize / 4;
+    mem_options.full_size = dmem_bytes / 4;
     mem_options.annotate = false;  // disassembling data would be nonsense
     if (const core::MemFileResult result = core::write_mem_file(dmem_path, dmem_words, mem_options);
         !result.ok) {

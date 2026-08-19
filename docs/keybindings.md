@@ -76,6 +76,7 @@ Standard editing keys, plus:
 | Key | What it does |
 |---|---|
 | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` | New, open, save |
+| `Ctrl+E` | Export `imem.mem` and `dmem.mem`, padded to the machine's depth |
 | Click the margin | Toggle a breakpoint on that line |
 | Click a diagnostic | Jump to the line it points at |
 

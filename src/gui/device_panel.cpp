@@ -25,6 +25,12 @@
 namespace rv::gui {
 namespace {
 
+/// "16 KB — 4096 x 32-bit". Both halves matter: the bytes are what the
+/// machine has, the depth is what a block memory is ordered by.
+QString memory_size_label(u32 bytes) {
+    return QString("%1 KB — %2 × 32-bit").arg(bytes / 1024).arg(bytes / 4);
+}
+
 QFont mono(int size = 10) {
     QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
     font.setPointSize(size);
@@ -205,23 +211,24 @@ DevicePanel::DevicePanel(dbg::DebugSession& session, QWidget* parent)
     // The two memories are part of the machine in the same way the peripherals
     // are, so they are configured in the same place. Both spaces are exported a
     // word per line, which is why the step is four bytes.
+    // A list rather than a number to type, and labelled by depth in words as
+    // well as bytes: a block memory is configured by how many words deep it
+    // is, so the label is the number that goes into the Block Memory Generator
+    // beside the .mem file this exports.
     const auto memory_box = [this](const char* label) {
-        auto* box = new QSpinBox(this);
-        box->setRange(static_cast<int>(core::kMinMemorySize),
-                      static_cast<int>(core::kMaxMemorySize));
-        box->setSingleStep(1024);
-        box->setSuffix(" B");
-        box->setGroupSeparatorShown(true);
-        box->setPrefix(QString(label) + " ");
-        box->setKeyboardTracking(false);  // resize when the number is finished, not per digit
+        auto* box = new QComboBox(this);
+        for (const u32 size : core::kCommonMemorySizes) {
+            box->addItem(QString("%1  %2").arg(label, memory_size_label(size)),
+                         QVariant(static_cast<uint>(size)));
+        }
         return box;
     };
     imem_ = memory_box("imem");
     dmem_ = memory_box("dmem");
     buttons->addWidget(imem_);
     buttons->addWidget(dmem_);
-    connect(imem_, &QSpinBox::valueChanged, this, &DevicePanel::on_memory_resized);
-    connect(dmem_, &QSpinBox::valueChanged, this, &DevicePanel::on_memory_resized);
+    connect(imem_, &QComboBox::currentIndexChanged, this, &DevicePanel::on_memory_resized);
+    connect(dmem_, &QComboBox::currentIndexChanged, this, &DevicePanel::on_memory_resized);
     layout->addLayout(buttons);
 
     controls_ = new QGroupBox("Controls", this);
@@ -233,19 +240,27 @@ DevicePanel::DevicePanel(dbg::DebugSession& session, QWidget* parent)
 }
 
 void DevicePanel::sync_memory_fields() {
-    const QSignalBlocker block_imem(imem_);
-    const QSignalBlocker block_dmem(dmem_);
-    imem_->setValue(static_cast<int>(session_->hart().imem().size()));
-    dmem_->setValue(static_cast<int>(session_->hart().bus().dmem().size()));
+    const auto select = [](QComboBox* box, u32 size, const char* label) {
+        const QSignalBlocker block(box);
+        const int found = box->findData(QVariant(static_cast<uint>(size)));
+        if (found >= 0) {
+            box->setCurrentIndex(found);
+            return;
+        }
+        // A file may name a size the list does not offer. Showing it is the
+        // only honest thing to do -- the alternative is a box that says one
+        // size while the machine has another.
+        box->addItem(QString("%1  %2").arg(label, memory_size_label(size)),
+                     QVariant(static_cast<uint>(size)));
+        box->setCurrentIndex(box->count() - 1);
+    };
+    select(imem_, session_->hart().imem().size(), "imem");
+    select(dmem_, session_->hart().bus().dmem().size(), "dmem");
 }
 
 void DevicePanel::on_memory_resized() {
-    // Rounded to a word rather than refused: both spaces are exported a word
-    // per line, so a size that is not a multiple of four describes a .mem file
-    // that cannot be written.
-    const auto imem = static_cast<u32>(imem_->value()) & ~3u;
-    const auto dmem = static_cast<u32>(dmem_->value()) & ~3u;
-    session_->hart().resize_memories(imem, dmem);
+    session_->hart().resize_memories(imem_->currentData().toUInt(),
+                                     dmem_->currentData().toUInt());
     sync_memory_fields();
     emit memoryResized();
 }

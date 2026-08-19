@@ -12,6 +12,7 @@
 
 #include "dbg/session.hpp"
 
+class QComboBox;
 class QPushButton;
 class QSpinBox;
 class QTableWidget;
@@ -71,8 +72,8 @@ private:
     QWidget* controls_ = nullptr;
     QVBoxLayout* controls_layout_ = nullptr;
     QPushButton* remove_ = nullptr;
-    QSpinBox* imem_ = nullptr;
-    QSpinBox* dmem_ = nullptr;
+    QComboBox* imem_ = nullptr;
+    QComboBox* dmem_ = nullptr;
     std::string controls_built_;
     QString last_warning_;
 };

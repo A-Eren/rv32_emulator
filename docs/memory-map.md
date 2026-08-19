@@ -222,8 +222,43 @@ initial $readmemh("imem.mem", imem);
 The byte address of line *n* is `n * 4`. `dmem.mem` packs the byte image
 little-endian, so `.word 0x12345678` appears as the single line `12345678`.
 
-By default the file is truncated at the high-water mark; `--pad` emits the full
-array, which some `$readmemh` uses want in order to avoid a partial-fill warning.
+By default the CLI truncates the file at the high-water mark; `--pad` emits the
+full array.
+
+### Getting it into Vivado
+
+`File → Export .mem…` (`Ctrl+E`) writes both images, **always padded to the
+full depth**. That is the point of padding: the file is read into an array of a
+fixed depth, and a file shorter than the array leaves the tail holding whatever
+the tool put there. That reads as the program going wrong rather than as the
+file being short, which is an afternoon nobody gets back.
+
+The depth is the number to configure the memory with, and it is on both ends of
+the same line. The size list in the Devices panel says
+
+```
+imem  16 KB — 4096 × 32-bit
+```
+
+and 4096 is what goes into the Block Memory Generator's **Write Depth**, with
+32 as the width. The exported file is exactly that many lines.
+
+```verilog
+reg [31:0] imem [0:4095];          // 4096 deep, matching the panel
+initial $readmemh("rv32_imem.mem", imem);
+```
+
+The list offers powers of two because that is how block memory comes: a depth
+that is not one wastes a whole block. A machine may still be given any size a
+file names — the list is what is worth offering, not what is allowed — and the
+panel will show it rather than round it silently.
+
+From the command line, `--pad` alone pads to the default 16 KB. Pass the same
+board file the interface uses to pad to the machine that board describes:
+
+```
+rv32 asm fib.s --pad --board board.toml
+```
 
 If the target Verilog memory is word-addressed without byte enables, `sb` and
 `sh` cannot be implemented in hardware. Pass `--strict-word-mem` to have the
