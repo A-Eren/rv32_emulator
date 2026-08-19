@@ -92,53 +92,78 @@ std::string join_path(const std::string& directory, const std::string& file) {
 // Catalogue
 // ---------------------------------------------------------------------------
 
+const std::vector<u32>& common_sizes(SizeUnit unit) {
+    static const std::vector<u32> kNone;
+    static const std::vector<u32> kBits = {1, 2, 4, 8, 16, 32};
+    static const std::vector<u32> kBytes = {64, 128, 256, 512, 1024, 2048, 4096};
+    static const std::vector<u32> kWords = {1, 2, 4, 8, 16, 32};
+    switch (unit) {
+        case SizeUnit::None: return kNone;
+        case SizeUnit::Bits: return kBits;
+        case SizeUnit::Bytes: return kBytes;
+        case SizeUnit::Words: return kWords;
+    }
+    return kNone;
+}
+
+std::string_view unit_name(SizeUnit unit) {
+    switch (unit) {
+        case SizeUnit::None: return "";
+        case SizeUnit::Bits: return "bits";
+        case SizeUnit::Bytes: return "bytes";
+        case SizeUnit::Words: return "registers";
+    }
+    return "";
+}
+
 const std::vector<DeviceType>& device_catalogue() {
     static const std::vector<DeviceType> types = {
-        {"uart", "character output", false, false,
+        {"uart", "character output", SizeUnit::None, false,
          [](u32, const std::string&) -> std::unique_ptr<Device> {
              return std::make_unique<UartDevice>();
          }},
-        {"leds", "32-bit output register", false, false,
-         [](u32, const std::string&) -> std::unique_ptr<Device> {
-             return std::make_unique<LedDevice>();
+        {"leds", "output register, as many bits as the board has LEDs", SizeUnit::Bits, false,
+         [](u32 width, const std::string&) -> std::unique_ptr<Device> {
+             return std::make_unique<LedDevice>(width == 0 ? kMaxWidth : static_cast<int>(width));
          }},
-        {"switches", "32-bit input register", false, false,
-         [](u32, const std::string&) -> std::unique_ptr<Device> {
-             return std::make_unique<SwitchDevice>();
+        {"switches", "input register, one bit per switch", SizeUnit::Bits, false,
+         [](u32 width, const std::string&) -> std::unique_ptr<Device> {
+             return std::make_unique<SwitchDevice>(width == 0 ? kMaxWidth
+                                                             : static_cast<int>(width));
          }},
-        {"button", "momentary input, can raise IRQ", false, false,
-         [](u32, const std::string&) -> std::unique_ptr<Device> {
-             return std::make_unique<ButtonDevice>();
+        {"button", "momentary inputs, can raise IRQ", SizeUnit::Bits, false,
+         [](u32 count, const std::string&) -> std::unique_ptr<Device> {
+             return std::make_unique<ButtonDevice>(count == 0 ? 1 : static_cast<int>(count));
          }},
-        {"value", "numeric input register", false, false,
+        {"value", "numeric input register", SizeUnit::None, false,
          [](u32, const std::string&) -> std::unique_ptr<Device> {
              return std::make_unique<ValueDevice>();
          }},
-        {"display", "7-segment digits", false, false,
+        {"display", "7-segment digits", SizeUnit::None, false,
          [](u32, const std::string&) -> std::unique_ptr<Device> {
              return std::make_unique<DisplayDevice>();
          }},
-        {"mtime", "cycle counter / mtime", false, false,
+        {"mtime", "cycle counter / mtime", SizeUnit::None, false,
          [](u32, const std::string&) -> std::unique_ptr<Device> {
              return std::make_unique<CycleDevice>();
          }},
-        {"mtimecmp", "timer compare", false, false,
+        {"mtimecmp", "timer compare", SizeUnit::None, false,
          [](u32, const std::string&) -> std::unique_ptr<Device> {
              return std::make_unique<TimerDevice>();
          }},
-        {"irq", "software/external IRQ requests", false, false,
+        {"irq", "software/external IRQ requests", SizeUnit::None, false,
          [](u32, const std::string&) -> std::unique_ptr<Device> {
              return std::make_unique<IrqDevice>();
          }},
-        {"ram", "memory block, words settable by hand", true, false,
+        {"ram", "memory block, words settable by hand", SizeUnit::Bytes, false,
          [](u32 size, const std::string&) -> std::unique_ptr<Device> {
              return std::make_unique<RamDevice>(size == 0 ? 256u : size, false);
          }},
-        {"rom", "read-only memory block", true, false,
+        {"rom", "read-only memory block", SizeUnit::Bytes, false,
          [](u32 size, const std::string&) -> std::unique_ptr<Device> {
              return std::make_unique<RamDevice>(size == 0 ? 256u : size, true);
          }},
-        {"custom", "your own registers, settable by hand, can raise IRQ", true, true,
+        {"custom", "your own registers, settable by hand, can raise IRQ", SizeUnit::Words, true,
          [](u32 size, const std::string& name) -> std::unique_ptr<Device> {
              // `size` is words here rather than bytes: a custom peripheral is
              // counted in registers, which is how its author thinks of it.
@@ -394,6 +419,20 @@ DeviceConfig describe(const Bus& bus) {
         if (const auto* custom = dynamic_cast<const CustomDevice*>(device)) {
             spec.size = custom->word_count();
             spec.name = custom->name();
+        }
+        // A width is only worth writing when it is not the whole register --
+        // a file full of `size = 32` says nothing.
+        if (const auto* leds = dynamic_cast<const LedDevice*>(device);
+            leds != nullptr && leds->width() != kMaxWidth) {
+            spec.size = static_cast<u32>(leds->width());
+        }
+        if (const auto* switches = dynamic_cast<const SwitchDevice*>(device);
+            switches != nullptr && switches->width() != kMaxWidth) {
+            spec.size = static_cast<u32>(switches->width());
+        }
+        if (const auto* buttons = dynamic_cast<const ButtonDevice*>(device);
+            buttons != nullptr && buttons->width() != 1) {
+            spec.size = static_cast<u32>(buttons->width());
         }
         // Inputs are the part of a device a person set, so they are what is
         // worth writing back out.

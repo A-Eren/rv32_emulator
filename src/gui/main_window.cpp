@@ -129,6 +129,7 @@ void MainWindow::build_layout() {
     // Resizing a memory throws away what no longer fits, so the program that
     // was loaded is no longer necessarily the program in imem. Say so rather
     // than let the next step run off the end of a truncated one.
+    connect(devices_, &DevicePanel::exportRequested, this, &MainWindow::on_export_mem);
     connect(devices_, &DevicePanel::memoryResized, this, [this] {
         status_->setText("Memory resized — press F5 to assemble into the new machine.");
         refresh_all();
@@ -767,16 +768,12 @@ private:
 
 }  // namespace
 
-void MainWindow::on_export_mem() {
+bool MainWindow::write_mem_files(const QString& imem_path, const QString& dmem_path,
+                                 bool annotate) {
     if (!session_->has_program()) {
         set_message("nothing to export — press F5 to assemble first");
-        return;
+        return false;
     }
-
-    const u32 imem_bytes = session_->hart().imem().size();
-    const u32 dmem_bytes = session_->hart().bus().dmem().size();
-    ExportMemDialog dialog(this, imem_bytes, dmem_bytes);
-    if (dialog.exec() != QDialog::Accepted) return;
 
     const as::AssembledProgram& program = session_->program();
     QStringList written;
@@ -787,34 +784,53 @@ void MainWindow::on_export_mem() {
     // that looks like the program going wrong rather than the file being short.
     options.pad_to_full = true;
 
-    if (dialog.wants_imem()) {
-        options.full_size = imem_bytes / 4;
-        options.annotate = dialog.annotate();
+    if (!imem_path.isEmpty()) {
+        options.full_size = session_->hart().imem().size() / 4;
+        options.annotate = annotate;
         const core::MemFileResult result =
-            core::write_mem_file(dialog.imem_path().toStdString(), program.imem_words, options);
+            core::write_mem_file(imem_path.toStdString(), program.imem_words, options);
         if (!result.ok) {
             QMessageBox::warning(this, "rv32", QString::fromStdString(result.error));
-            return;
+            return false;
         }
-        written << QFileInfo(dialog.imem_path()).fileName();
+        written << QFileInfo(imem_path).fileName();
     }
 
-    if (dialog.wants_dmem()) {
-        options.full_size = dmem_bytes / 4;
+    if (!dmem_path.isEmpty()) {
+        options.full_size = session_->hart().bus().dmem().size() / 4;
         options.annotate = false;  // disassembling data would be nonsense
         const std::vector<Word> words = core::pack_bytes_to_words(program.dmem_bytes);
         const core::MemFileResult result =
-            core::write_mem_file(dialog.dmem_path().toStdString(), words, options);
+            core::write_mem_file(dmem_path.toStdString(), words, options);
         if (!result.ok) {
             QMessageBox::warning(this, "rv32", QString::fromStdString(result.error));
-            return;
+            return false;
         }
-        written << QFileInfo(dialog.dmem_path()).fileName();
+        written << QFileInfo(dmem_path).fileName();
     }
 
-    set_message(written.isEmpty() ? "nothing selected to export"
-                                  : "wrote " + written.join(" and ") + " to " +
-                                        QFileInfo(dialog.imem_path()).path());
+    if (written.isEmpty()) {
+        set_message("nothing selected to export");
+        return false;
+    }
+    set_message("wrote " + written.join(" and ") + " to " +
+                QFileInfo(imem_path.isEmpty() ? dmem_path : imem_path).path());
+    return true;
 }
+
+void MainWindow::on_export_mem() {
+    if (!session_->has_program()) {
+        set_message("nothing to export — press F5 to assemble first");
+        return;
+    }
+
+    ExportMemDialog dialog(this, session_->hart().imem().size(),
+                           session_->hart().bus().dmem().size());
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    write_mem_files(dialog.wants_imem() ? dialog.imem_path() : QString(),
+                    dialog.wants_dmem() ? dialog.dmem_path() : QString(), dialog.annotate());
+}
+
 
 }  // namespace rv::gui

@@ -37,6 +37,12 @@ public:
     /// cannot be read.
     bool load_devices(const QString& path);
 
+    /// Write the assembled program as $readmemh images, each padded to the
+    /// depth of the memory it belongs to. Either path may be empty to skip it.
+    /// Separate from the dialog that asks for the paths, so the writing can be
+    /// checked without one.
+    bool write_mem_files(const QString& imem_path, const QString& dmem_path, bool annotate);
+
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
 

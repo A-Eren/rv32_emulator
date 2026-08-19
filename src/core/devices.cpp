@@ -16,12 +16,18 @@ std::string summary(const char* format, ...) {
     return buffer;
 }
 
-std::string bit_string(u32 value, char one, char zero) {
+std::string bit_string(u32 value, char one, char zero, int width = kMaxWidth) {
     std::string out;
-    for (int index = 31; index >= 0; --index) {
+    for (int index = width - 1; index >= 0; --index) {
         out.push_back(((value >> index) & 1u) != 0 ? one : zero);
     }
     return out;
+}
+
+/// "8-bit output register" -- the width belongs in what the device calls
+/// itself, since it is the first thing worth knowing about it.
+std::string width_description(int width, const char* what) {
+    return std::to_string(width) + "-bit " + what;
 }
 
 }  // namespace
@@ -51,43 +57,71 @@ std::string UartDevice::state_summary() const {
 // LEDs
 // ---------------------------------------------------------------------------
 
+LedDevice::LedDevice(int width)
+    : width_(std::clamp(width, 1, kMaxWidth)),
+      description_(width_description(width_, "output register")) {}
+
 std::string LedDevice::state_summary() const {
-    return summary("%08x  ", value_) + bit_string(value_, '#', '.');
+    return summary("%08x  ", value_) + bit_string(value_, '#', '.', width_);
 }
 
 // ---------------------------------------------------------------------------
 // Switches
 // ---------------------------------------------------------------------------
 
+SwitchDevice::SwitchDevice(int width)
+    : width_(std::clamp(width, 1, kMaxWidth)),
+      description_(width_description(width_, "input register")) {}
+
 std::vector<InputControl> SwitchDevice::inputs() const {
-    return {InputControl{"switches", InputKind::Toggle, value_, 32, 0, 0xffff'ffffu}};
+    return {InputControl{"switches", InputKind::Toggle, value_, width_, 0, width_mask(width_)}};
 }
 
 void SwitchDevice::set_input(std::size_t index, u32 value) {
-    if (index == 0) value_ = value;
+    if (index == 0) value_ = value & width_mask(width_);
 }
 
 std::string SwitchDevice::state_summary() const {
-    return summary("%08x  ", value_) + bit_string(value_, '1', '0');
+    return summary("%08x  ", value_) + bit_string(value_, '1', '0', width_);
 }
 
 // ---------------------------------------------------------------------------
 // Button
 // ---------------------------------------------------------------------------
 
+ButtonDevice::ButtonDevice(int count)
+    : count_(std::clamp(count, 1, kMaxWidth)),
+      description_(count_ == 1 ? "momentary input, can raise IRQ"
+                               : std::to_string(count_) + " momentary inputs, can raise IRQ") {}
+
 std::vector<InputControl> ButtonDevice::inputs() const {
-    return {InputControl{"press", InputKind::Button, pressed_ ? 1u : 0u, 1, 0, 1},
-            InputControl{"raises IRQ", InputKind::Toggle, raises_interrupt_ ? 1u : 0u, 1, 0, 1}};
+    std::vector<InputControl> out;
+    out.reserve(static_cast<std::size_t>(count_) + 1);
+    for (int index = 0; index < count_; ++index) {
+        out.push_back(InputControl{count_ == 1 ? "press" : "press " + std::to_string(index),
+                                   InputKind::Button, (pressed_ >> index) & 1u, 1, 0, 1});
+    }
+    // Last, whatever the count, so the buttons read as a row and the line
+    // reads as a switch on the side of it.
+    out.push_back(
+        InputControl{"raises IRQ", InputKind::Toggle, raises_interrupt_ ? 1u : 0u, 1, 0, 1});
+    return out;
 }
 
 void ButtonDevice::set_input(std::size_t index, u32 value) {
-    if (index == 0) pressed_ = (value & 1u) != 0;
-    if (index == 1) raises_interrupt_ = (value & 1u) != 0;
+    if (index < static_cast<std::size_t>(count_)) {
+        const u32 bit = 1u << index;
+        pressed_ = (value & 1u) != 0 ? (pressed_ | bit) : (pressed_ & ~bit);
+        return;
+    }
+    if (index == static_cast<std::size_t>(count_)) raises_interrupt_ = (value & 1u) != 0;
 }
 
 std::string ButtonDevice::state_summary() const {
-    return summary("%s%s", pressed_ ? "pressed" : "released",
-                   raises_interrupt_ ? ", raises external IRQ" : "");
+    std::string out = count_ == 1 ? (pressed_ != 0 ? "pressed" : "released")
+                                  : bit_string(pressed_, 'v', '.', count_);
+    if (raises_interrupt_) out += ", raises external IRQ";
+    return out;
 }
 
 // ---------------------------------------------------------------------------

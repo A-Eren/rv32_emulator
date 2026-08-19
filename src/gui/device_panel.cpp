@@ -72,9 +72,10 @@ public:
         name_row_ = form->rowCount();
         form->addRow("Name", name_);
 
-        size_ = new QSpinBox(this);
-        size_->setRange(1, 4096);
-        size_->setValue(256);
+        // A list, for the same reason the memory sizes are one: these are
+        // hardware quantities and they come in powers of two. A board has 8 or
+        // 16 switches, not 13.
+        size_ = new QComboBox(this);
         size_row_ = form->rowCount();
         form->addRow("Size", size_);
 
@@ -90,13 +91,13 @@ public:
 
         connect(type_, &QComboBox::currentIndexChanged, this, &AddDeviceDialog::retype);
         connect(address_, &QLineEdit::textChanged, this, &AddDeviceDialog::update_fields);
-        connect(size_, &QSpinBox::valueChanged, this, &AddDeviceDialog::retype);
+        connect(size_, &QComboBox::currentIndexChanged, this, &AddDeviceDialog::update_fields);
         retype();
     }
 
     QString type() const { return type_->currentData().toString(); }
     std::size_t slot() const { return core::slot_of_address(address()); }
-    u32 size() const { return static_cast<u32>(size_->value()); }
+    u32 size() const { return size_->currentData().toUInt(); }
     QString name() const { return name_->text(); }
     QString load_path() const { return load_->text(); }
 
@@ -127,13 +128,30 @@ private:
     /// with it.
     void retype() {
         const core::DeviceType* selected = core::find_device_type(type().toStdString());
-        const bool sized = selected != nullptr && selected->takes_size;
+        const core::SizeUnit unit =
+            selected != nullptr ? selected->unit : core::SizeUnit::None;
+        const bool sized = unit != core::SizeUnit::None;
         const bool named = selected != nullptr && selected->takes_name;
-        size_->setSuffix(named ? " registers" : " bytes");
+        const bool block = unit == core::SizeUnit::Bytes;
+
+        {
+            const QSignalBlocker block_size(size_);
+            size_->clear();
+            const QString units = QString::fromUtf8(core::unit_name(unit).data(),
+                                                    static_cast<int>(core::unit_name(unit).size()));
+            for (const u32 value : core::common_sizes(unit)) {
+                size_->addItem(QString("%1 %2").arg(value).arg(units),
+                               QVariant(static_cast<uint>(value)));
+            }
+            // The largest width, or a middling block -- a 32-bit register and
+            // a 256-byte block are what someone means when they do not say.
+            size_->setCurrentIndex(unit == core::SizeUnit::Bytes ? 2 : size_->count() - 1);
+        }
+
         if (auto* form = qobject_cast<QFormLayout*>(layout())) {
             form->setRowVisible(name_row_, named);
             form->setRowVisible(size_row_, sized);
-            form->setRowVisible(load_row_, sized && !named);
+            form->setRowVisible(load_row_, block);
         }
         address_->setText(
             QString::asprintf("0x%08x", core::slot_address(core::first_free_slot(*bus_, span()))));
@@ -171,7 +189,7 @@ private:
     QComboBox* type_ = nullptr;
     QLineEdit* address_ = nullptr;
     QLineEdit* name_ = nullptr;
-    QSpinBox* size_ = nullptr;
+    QComboBox* size_ = nullptr;
     QLineEdit* load_ = nullptr;
     QLabel* note_ = nullptr;
     int name_row_ = 0;
@@ -206,6 +224,13 @@ DevicePanel::DevicePanel(dbg::DebugSession& session, QWidget* parent)
     connect(remove_, &QPushButton::clicked, this, &DevicePanel::on_remove);
     buttons->addWidget(add);
     buttons->addWidget(remove_);
+
+    // Beside the sizes rather than only in the File menu: the depth being
+    // exported is the number in the list next to it, and the two belong on the
+    // same row for the same reason they belong on the same line of the label.
+    auto* export_button = new QPushButton("Export .mem…", this);
+    connect(export_button, &QPushButton::clicked, this, &DevicePanel::exportRequested);
+    buttons->addWidget(export_button);
     buttons->addStretch();
 
     // The two memories are part of the machine in the same way the peripherals

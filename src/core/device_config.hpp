@@ -21,13 +21,30 @@
 
 namespace rv::core {
 
+/// What a type's `size` counts, which decides what the interface asks for and
+/// in what units. A device that is not sized at all is `None`.
+enum class SizeUnit : u8 {
+    None,
+    /// Bits wired up: how many LEDs the board has, how many switches.
+    Bits,
+    /// Bytes of storage, for a block.
+    Bytes,
+    /// 32-bit registers, for a peripheral counted in registers.
+    Words,
+};
+
+/// The sizes worth offering for each unit. Powers of two, for the same reason
+/// the memory list is: this is hardware, and a width or a depth that is not one
+/// wastes what it is built from.
+const std::vector<u32>& common_sizes(SizeUnit unit);
+std::string_view unit_name(SizeUnit unit);
+
 /// One entry in the catalogue of device types that can be created by name.
 struct DeviceType {
     std::string_view name;
     std::string_view description;
-    /// True if `size` is meaningful, which is what the interface uses to decide
-    /// whether to ask for one.
-    bool takes_size = false;
+    /// What `size` counts for this type, and whether it has one at all.
+    SizeUnit unit = SizeUnit::None;
     /// True if the device carries a name of its own, which the interface asks
     /// for and the file records.
     bool takes_name = false;

@@ -11,9 +11,12 @@
 #include <QCheckBox>
 #include <QListWidget>
 #include <QComboBox>
+#include <QDir>
+#include <QFile>
 #include <QGroupBox>
 #include <QLineEdit>
 #include <QPointer>
+#include <QPushButton>
 #include <QSpinBox>
 #include <QTableWidget>
 
@@ -503,6 +506,68 @@ RV_TEST(gui, a_block_and_a_custom_peripheral_get_fields_to_type_into) {
     first->setText("0x2a");
     emit first->editingFinished();
     RV_CHECK_EQ(bus.load(core::slot_address(0), 4, false).value, 42u);
+}
+
+RV_TEST(gui, the_exported_images_are_as_deep_as_the_machine) {
+    // The whole point of the tool: the file goes into a block memory of a
+    // fixed depth, so the file has to be that many lines whatever the program
+    // is. Getting it short is the bug that reads as the program going wrong.
+    Fixture fixture;
+    fixture.session().hart().resize_memories(4096, 2048);
+
+    const QString folder = QDir::tempPath() + "/rv32_export_test";
+    QDir().mkpath(folder);
+    const QString imem = folder + "/t_imem.mem";
+    const QString dmem = folder + "/t_dmem.mem";
+    QFile::remove(imem);
+    QFile::remove(dmem);
+
+    RV_CHECK(fixture.window.write_mem_files(imem, dmem, /*annotate=*/false));
+
+    const auto line_count = [](const QString& path) {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return -1;
+        return static_cast<int>(QString::fromUtf8(file.readAll()).count(QLatin1Char('\n')));
+    };
+    RV_CHECK_EQ(line_count(imem), 1024);  // 4096 bytes / 4
+    RV_CHECK_EQ(line_count(dmem), 512);   // 2048 bytes / 4
+
+    QFile::remove(imem);
+    QFile::remove(dmem);
+    QDir().rmdir(folder);
+}
+
+RV_TEST(gui, the_devices_panel_can_export) {
+    // Beside the size lists, because the depth being written is the number in
+    // the list next to the button.
+    Fixture fixture;
+    auto* panel = fixture.window.findChild<DevicePanel*>();
+    bool found = false;
+    for (QPushButton* button : panel->findChildren<QPushButton*>()) {
+        if (button->text().startsWith("Export")) found = true;
+    }
+    RV_CHECK(found);
+}
+
+RV_TEST(gui, a_bank_is_offered_at_the_widths_hardware_comes_in) {
+    // Eight LEDs, sixteen switches -- what a board actually has. The catalogue
+    // says what unit a type is counted in, so the dialog does not have to know
+    // that leds are bits and ram is bytes.
+    RV_CHECK(core::find_device_type("leds")->unit == core::SizeUnit::Bits);
+    RV_CHECK(core::find_device_type("ram")->unit == core::SizeUnit::Bytes);
+    RV_CHECK(core::find_device_type("custom")->unit == core::SizeUnit::Words);
+    RV_CHECK(core::find_device_type("uart")->unit == core::SizeUnit::None);
+
+    Fixture fixture;
+    core::Bus& bus = fixture.session().hart().bus();
+    bus.detach_all();
+    auto* leds = static_cast<core::LedDevice*>(bus.attach(0, core::make_device("leds", 8)));
+    RV_CHECK_EQ(leds->width(), 8);
+
+    fixture.window.step_line();
+    QTableWidget* list = fixture.window.findChild<DevicePanel*>()->findChild<QTableWidget*>();
+    // Eight lights shown, not thirty-two that do not exist.
+    RV_CHECK_EQ(list->item(0, 3)->text().trimmed().size(), QString("00000000  ........").size());
 }
 
 RV_TEST(gui, typing_ad_offers_add_and_addi_in_the_editor) {

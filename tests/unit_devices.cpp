@@ -553,3 +553,83 @@ RV_TEST(devices, a_machine_round_trips_through_a_file) {
     RV_CHECK_STR(custom->name(), "sensor");
     RV_CHECK_EQ(custom->word_count(), 3u);
 }
+
+// ---------------------------------------------------------------------------
+// How wide a device is
+// ---------------------------------------------------------------------------
+
+RV_TEST(devices, a_bank_is_as_wide_as_the_board_it_stands_for) {
+    // A program that writes bit 20 of an eight-LED bank is writing to nothing.
+    // Reading back what was written would be the emulator agreeing with a
+    // program the board will not.
+    LedDevice eight(8);
+    RV_CHECK_EQ(eight.width(), 8);
+    eight.poke(0, 0xffffffff);
+    RV_CHECK_HEX(eight.peek(0), 0xffu);
+    RV_CHECK_EQ(eight.state_summary().size(), std::string("00000000ff  ").size() - 2 + 8);
+
+    SwitchDevice sixteen(16);
+    sixteen.set_input(0, 0xffffffff);
+    RV_CHECK_HEX(sixteen.value(), 0xffffu);
+    RV_CHECK_EQ(sixteen.inputs().front().bit_count, 16);
+}
+
+RV_TEST(devices, a_row_of_buttons_is_one_device) {
+    // Four direction buttons are four bits of one peripheral, not four
+    // peripherals taking four addresses.
+    ButtonDevice pad(4);
+    RV_CHECK_EQ(pad.slot_count(), std::size_t{1});
+    // Four buttons plus the interrupt switch.
+    RV_CHECK_EQ(pad.inputs().size(), std::size_t{5});
+
+    pad.set_input(2, 1);
+    RV_CHECK_HEX(pad.peek(0), 0b0100u);
+    RV_CHECK_HEX(pad.interrupt_lines(0), kIrqExternal);
+
+    pad.set_input(2, 0);
+    RV_CHECK_HEX(pad.interrupt_lines(0), 0u);
+
+    // The last control is still the interrupt switch, whatever the count.
+    pad.set_input(4, 0);
+    pad.set_input(0, 1);
+    RV_CHECK_HEX(pad.interrupt_lines(0), 0u);
+}
+
+RV_TEST(devices, a_width_survives_a_round_trip_through_a_file) {
+    Machine m;
+    Bus& bus = m.hart().bus();
+    bus.detach_all();
+    bus.attach(0, std::make_unique<LedDevice>(8));
+    bus.attach(1, std::make_unique<SwitchDevice>(16));
+    bus.attach(2, std::make_unique<ButtonDevice>(4));
+
+    const std::string text = write_device_config(describe(m.hart()));
+    Machine other;
+    const DeviceConfig back = parse_device_config(text, "widths.toml");
+    RV_CHECK(back.ok());
+    RV_CHECK_STR(apply_machine_config(other.hart(), back), "");
+
+    RV_CHECK_EQ(other.hart().bus().find<LedDevice>()->width(), 8);
+    RV_CHECK_EQ(other.hart().bus().find<SwitchDevice>()->width(), 16);
+    RV_CHECK_EQ(other.hart().bus().find<ButtonDevice>()->width(), 4);
+}
+
+RV_TEST(devices, a_full_width_bank_says_nothing_about_its_width) {
+    // The default is the whole register, and a file full of `size = 32` would
+    // be noise.
+    Machine m;
+    m.hart().bus().detach_all();
+    m.hart().bus().attach(0, std::make_unique<LedDevice>());
+    RV_CHECK_EQ(write_device_config(describe(m.hart().bus())).find("size"), std::string::npos);
+}
+
+RV_TEST(devices, the_offered_sizes_are_powers_of_two) {
+    // This is hardware: a width or a depth that is not a power of two wastes
+    // what it is built from.
+    for (const SizeUnit unit : {SizeUnit::Bits, SizeUnit::Bytes, SizeUnit::Words}) {
+        const std::vector<u32>& sizes = common_sizes(unit);
+        RV_CHECK(!sizes.empty());
+        for (const u32 size : sizes) RV_CHECK_EQ(size & (size - 1), 0u);
+    }
+    RV_CHECK(common_sizes(SizeUnit::None).empty());
+}

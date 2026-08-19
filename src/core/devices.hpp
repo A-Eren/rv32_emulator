@@ -40,10 +40,23 @@ private:
 };
 
 /// A 32-bit output register standing in for board LEDs.
+/// How many bits of a device are wired up. A board has the LEDs and switches
+/// it has -- sixteen on a Basys 3, eight on a smaller one -- and a program that
+/// writes bit 20 of an eight-LED bank is writing to nothing. Saying how wide it
+/// is here is what lets the panel show that bank and not a row of thirty-two
+/// lights that do not exist.
+inline constexpr int kMaxWidth = 32;
+constexpr u32 width_mask(int width) {
+    return width >= kMaxWidth ? ~0u : (1u << width) - 1u;
+}
+
 class LedDevice final : public Device {
 public:
+    explicit LedDevice(int width = kMaxWidth);
+
     std::string_view type_name() const override { return "leds"; }
-    std::string_view description() const override { return "32-bit output register"; }
+    std::string_view description() const override { return description_; }
+    int width() const { return width_; }
 
     u32 read(u32 offset, u8 /*width*/) override { return peek(offset); }
     void write(u32 offset, u8 /*width*/, u32 value) override { poke(offset, value); }
@@ -51,23 +64,31 @@ public:
 
     u32 peek(u32 offset) const override { return offset == 0 ? value_ : 0u; }
     void poke(u32 offset, u32 value) override {
-        if (offset == 0) value_ = value;
+        // Masked to the wired width. A bit with no light on the end of it does
+        // not light up, and reading back what was written to one would be the
+        // emulator agreeing with a program the board will not.
+        if (offset == 0) value_ = value & width_mask(width_);
     }
 
     std::string state_summary() const override;
 
     u32 value() const { return value_; }
-    void set_raw(u32 value) { value_ = value; }
+    void set_raw(u32 value) { value_ = value & width_mask(width_); }
 
 private:
+    int width_;
+    std::string description_;
     u32 value_ = 0;
 };
 
 /// A row of switches the user flips.
 class SwitchDevice final : public Device {
 public:
+    explicit SwitchDevice(int width = kMaxWidth);
+
     std::string_view type_name() const override { return "switches"; }
-    std::string_view description() const override { return "32-bit input register"; }
+    std::string_view description() const override { return description_; }
+    int width() const { return width_; }
 
     u32 read(u32 offset, u8 /*width*/) override { return peek(offset); }
     void write(u32 /*offset*/, u8 /*width*/, u32 /*value*/) override {}  // input only
@@ -80,31 +101,39 @@ public:
     std::string state_summary() const override;
 
     u32 value() const { return value_; }
-    void set_value(u32 value) { value_ = value; }
+    void set_value(u32 value) { value_ = value & width_mask(width_); }
 
 private:
+    int width_;
+    std::string description_;
     u32 value_ = 0;
 };
 
 /// A momentary button. Reads as 1 while held and can raise the external
 /// interrupt line -- the simplest thing that behaves like asynchronous input.
-///   +0x0  RW  1 while pressed; writing 0 acknowledges
+///   +0x0  RW  a bit per button, 1 while held; writing 0 acknowledges
+///
+/// One by default, or a row of them: a board with four direction buttons is
+/// one device with four bits, not four devices.
 class ButtonDevice final : public Device {
 public:
+    explicit ButtonDevice(int count = 1);
+
     std::string_view type_name() const override { return "button"; }
-    std::string_view description() const override { return "momentary input, can raise IRQ"; }
+    std::string_view description() const override { return description_; }
+    int width() const { return count_; }
 
     u32 read(u32 offset, u8 /*width*/) override { return peek(offset); }
     void write(u32 offset, u8 /*width*/, u32 value) override { poke(offset, value); }
-    void reset() override { pressed_ = false; }
+    void reset() override { pressed_ = 0; }
 
-    u32 peek(u32 offset) const override { return offset == 0 ? (pressed_ ? 1u : 0u) : 0u; }
+    u32 peek(u32 offset) const override { return offset == 0 ? pressed_ : 0u; }
     void poke(u32 offset, u32 value) override {
-        if (offset == 0) pressed_ = (value & 1u) != 0;
+        if (offset == 0) pressed_ = value & width_mask(count_);
     }
 
     u32 interrupt_lines(u64 /*now*/) const override {
-        return (pressed_ && raises_interrupt_) ? kIrqExternal : 0u;
+        return (pressed_ != 0 && raises_interrupt_) ? kIrqExternal : 0u;
     }
 
     std::vector<InputControl> inputs() const override;
@@ -113,9 +142,12 @@ public:
 
     void set_raises_interrupt(bool raises) { raises_interrupt_ = raises; }
     bool raises_interrupt() const { return raises_interrupt_; }
+    u32 pressed() const { return pressed_; }
 
 private:
-    bool pressed_ = false;
+    int count_;
+    std::string description_;
+    u32 pressed_ = 0;
     bool raises_interrupt_ = true;
 };
 

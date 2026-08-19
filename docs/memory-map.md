@@ -51,14 +51,39 @@ The default machine, if nothing says otherwise:
 
 And the types that can be added:
 
-| Type | | |
+| Type | | Sized in |
 |---|---|---|
-| `button` | momentary input; raises the external interrupt line while held |
-| `value` | a number the user types in, standing in for a sensor or an ADC |
-| `display` | 7-segment digits, one byte each |
-| `ram` | a memory block, `size` bytes, optionally preloaded with `load` |
-| `rom` | the same, but stores from the program are ignored |
-| `custom` | your own: a `name`, `size` registers the program can read and write, each one settable by hand, and a line it can raise an interrupt on |
+| `button` | momentary inputs; raise the external interrupt line while held | bits |
+| `value` | a number the user types in, standing in for a sensor or an ADC | — |
+| `display` | 7-segment digits, one byte each | — |
+| `ram` | a memory block, optionally preloaded with `load` | bytes |
+| `rom` | the same, but stores from the program are ignored | bytes |
+| `custom` | your own: a `name`, registers the program can read and write, each settable by hand, and a line it can raise an interrupt on | registers |
+
+`leds` and `switches` are sized in bits too. Every size is chosen from a list of
+powers of two, for the same reason the memory sizes are: this is hardware, and a
+width or a depth that is not one wastes what it is built from.
+
+### How wide a bank is
+
+A board has the LEDs and switches it has — sixteen on a Basys 3, eight on
+something smaller — and `size` says how many are wired up:
+
+```toml
+[[device]]
+type = "leds"
+address = 0xffff0010
+size = 16
+```
+
+Bits above the width are **masked off**, not stored. A program that writes bit
+20 of an eight-LED bank is writing to nothing, and reading back what it wrote
+would be the emulator agreeing with a program the board will not. The panel
+shows that many lights and no more.
+
+A row of buttons is one device, not one per button: five direction buttons are
+five bits at one address, which is how they are wired and how a program reads
+them. The interrupt switch is always the last control, whatever the count.
 
 A memory block takes as many slots as its size needs, so a 128-byte block
 occupies eight.

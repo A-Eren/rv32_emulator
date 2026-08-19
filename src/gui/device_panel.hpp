@@ -43,6 +43,10 @@ signals:
     void devicesChanged();
     /// Memory was resized, which invalidates the loaded program.
     void memoryResized();
+    /// Asked for the memories to be written out. The panel raises it rather
+    /// than doing it: the depth is a property of the machine, which is here,
+    /// but the words are the assembled program, which is not.
+    void exportRequested();
     /// A control was operated. Distinct from devicesChanged because it does not
     /// invalidate addresses, only values.
     void inputChanged();
