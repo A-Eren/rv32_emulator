@@ -5,6 +5,7 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QPalette>
+#include <QTextCursor>
 #include <QStyleFactory>
 
 #include "gui/editor_widget.hpp"
@@ -64,9 +65,11 @@ int main(int argc, char** argv) {
     QCommandLineOption screenshot("screenshot", "render one frame to <file> and exit", "file");
     QCommandLineOption steps("steps", "step this many lines before rendering", "n", "0");
     QCommandLineOption tab("tab", "select a dock tab before rendering", "name");
+    QCommandLineOption caret("caret", "put the caret at <line>:<col> before rendering", "pos");
     parser.addOption(screenshot);
     parser.addOption(steps);
     parser.addOption(tab);
+    parser.addOption(caret);
     parser.process(app);
 
     rv::gui::MainWindow window;
@@ -92,6 +95,15 @@ int main(int argc, char** argv) {
     if (parser.isSet(screenshot)) {
         for (int i = 0, n = parser.value(steps).toInt(); i < n; ++i) window.step_line();
         if (parser.isSet(tab)) window.show_tab(parser.value(tab));
+        if (parser.isSet(caret)) {
+            const QStringList parts = parser.value(caret).split(':');
+            window.editor().go_to_line(parts.value(0).toInt());
+            QTextCursor cursor = window.editor().textCursor();
+            cursor.movePosition(QTextCursor::StartOfBlock);
+            cursor.movePosition(QTextCursor::Right, QTextCursor::MoveAnchor,
+                                parts.value(1, "0").toInt());
+            window.editor().setTextCursor(cursor);
+        }
         QCoreApplication::processEvents();
         return window.grab().save(parser.value(screenshot)) ? 0 : 1;
     }

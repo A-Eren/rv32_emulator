@@ -7,15 +7,42 @@
 #pragma once
 
 #include <QPlainTextEdit>
+#include <QStringList>
 #include <QWidget>
+
+class QCompleter;
+class QStringListModel;
 #include <map>
 #include <vector>
 
+#include "asm/complete.hpp"
 #include "asm/diagnostic.hpp"
+#include "asm/symtab.hpp"
 
 namespace rv::gui {
 
 class EditorWidget;
+
+/// The one-line hint under the caret: the signature of the instruction being
+/// written, with the operand the caret is in picked out.
+class HintBar final : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit HintBar(QWidget* parent = nullptr);
+    void show_for(const as::Context& context);
+    QString text() const { return text_; }
+    QSize sizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+
+private:
+    QString text_;
+    QString form_;
+    int highlight_begin_ = -1;
+    int highlight_end_ = -1;
+};
 
 /// The margin down the left. A separate widget because QPlainTextEdit reserves
 /// the space but does not paint it.
@@ -56,13 +83,27 @@ public:
     int current_line() const;
     void go_to_line(int line);
 
+    /// Symbols the completer offers as branch and load targets. Refreshed
+    /// after every assemble.
+    void set_symbols(const as::SymbolTable* symbols) { symbols_ = symbols; }
+
+    /// Offer completions for the caret's position. Bound to Ctrl+Space, and
+    /// triggered automatically once two characters of a word are typed.
+    void request_completion();
+    HintBar* hint_bar() const { return hint_; }
+    /// What the completer is currently offering, for the tests.
+    QStringList visible_completions() const;
+
 signals:
     void breakpointToggled(int line);
 
 protected:
     void resizeEvent(QResizeEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
 
 private slots:
+    void insert_completion(const QString& text);
+    void update_hint();
     void update_gutter_width();
     void update_gutter(const QRect& rect, int dy);
     void highlight_current_line();
@@ -71,6 +112,13 @@ private:
     void apply_diagnostic_marks();
 
     GutterWidget* gutter_;
+    QCompleter* completer_ = nullptr;
+    QStringListModel* completion_model_ = nullptr;
+    HintBar* hint_ = nullptr;
+    const as::SymbolTable* symbols_ = nullptr;
+    /// The candidates behind the model's strings, so accepting one can use its
+    /// signature rather than re-deriving it.
+    std::vector<as::Completion> candidates_;
     /// Line number -> the worst diagnostic reported on it.
     std::map<int, as::Diagnostic> diagnostics_;
     std::vector<int> breakpoints_;

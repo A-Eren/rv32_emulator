@@ -358,6 +358,69 @@ RV_TEST(gui, a_device_configuration_round_trips_through_the_panel) {
     RV_CHECK_EQ(reparsed.devices.size(), described.devices.size());
 }
 
+RV_TEST(gui, typing_ad_offers_add_and_addi_in_the_editor) {
+    // The request, end to end: type two characters and the popup appears with
+    // the instructions that start with them.
+    Fixture fixture;
+    fixture.editor().setPlainText("        ad");
+    QTextCursor cursor = fixture.editor().textCursor();
+    cursor.movePosition(QTextCursor::End);
+    fixture.editor().setTextCursor(cursor);
+
+    fixture.editor().request_completion();
+    const QStringList offered = fixture.editor().visible_completions();
+    RV_CHECK(offered.contains("add"));
+    RV_CHECK(offered.contains("addi"));
+    RV_CHECK(!offered.contains("sub"));
+}
+
+RV_TEST(gui, the_hint_bar_names_the_operand_the_caret_is_in) {
+    // The second half of the request: once an instruction is chosen, the
+    // operand shapes appear.
+    Fixture fixture;
+    const auto hint_after = [&](const char* line) {
+        fixture.editor().setPlainText(line);
+        QTextCursor cursor = fixture.editor().textCursor();
+        cursor.movePosition(QTextCursor::End);
+        fixture.editor().setTextCursor(cursor);
+        return fixture.editor().hint_bar()->text();
+    };
+
+    RV_CHECK_STR(hint_after("        addi ").toStdString(), "addi rd, rs1, imm");
+    RV_CHECK_STR(hint_after("        lw ").toStdString(), "lw rd, offset(base)");
+    RV_CHECK_STR(hint_after("        beq a0, a1, ").toStdString(), "beq rs1, rs2, label");
+
+    // Nothing to say while the mnemonic itself is still being typed.
+    RV_CHECK(hint_after("        ad").isEmpty());
+}
+
+RV_TEST(gui, completion_offers_registers_where_a_register_belongs) {
+    Fixture fixture;
+    fixture.editor().setPlainText("        addi a0, a");
+    QTextCursor cursor = fixture.editor().textCursor();
+    cursor.movePosition(QTextCursor::End);
+    fixture.editor().setTextCursor(cursor);
+
+    fixture.editor().request_completion();
+    const QStringList offered = fixture.editor().visible_completions();
+    RV_CHECK(offered.contains("a0"));
+    RV_CHECK(!offered.contains("add"));
+}
+
+RV_TEST(gui, completion_offers_the_programs_own_labels) {
+    Fixture fixture(
+        "_start: nop\n"
+        "loop:   nop\n"
+        "        ebreak\n");
+    fixture.editor().setPlainText("        beq a0, a1, lo");
+    QTextCursor cursor = fixture.editor().textCursor();
+    cursor.movePosition(QTextCursor::End);
+    fixture.editor().setTextCursor(cursor);
+
+    fixture.editor().request_completion();
+    RV_CHECK(fixture.editor().visible_completions().contains("loop"));
+}
+
 RV_TEST(gui, syntax_roles_come_from_the_assemblers_own_tables) {
     // `addi` is a mnemonic because the instruction table says so, and `addii`
     // stops being one the moment the second i is typed.

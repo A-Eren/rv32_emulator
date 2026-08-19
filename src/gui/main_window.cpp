@@ -309,6 +309,8 @@ void MainWindow::assemble() {
     }
 
     session_->load_source(text.toStdString(), name, options);
+    // The completer offers this program's labels as branch and load targets.
+    editor_->set_symbols(&session_->symbols());
     encoding_->follow_pc();
     set_message(QString::asprintf("assembled: %zu instructions, %zu bytes of data",
                                   session_->program().imem_words.size(),
