@@ -10,9 +10,10 @@ serves three questions:
 2. **How did this instruction become 32 bits?** — a bitfield breakdown panel
 3. **Why did it not assemble?** — line, column, caret, and a suggested fix
 
-The editor completes as you type, then greys the operands the instruction still
-wants in after the caret — a form to fill rather than a manual to consult. Both
-are generated from the same table the assembler encodes with — so a hint
+The editor suggests the instruction in a strip that folds away once it is
+chosen, then greys the operands it still wants in after the caret — a form to
+fill rather than a manual to consult. Both are generated from the same table
+the assembler encodes with — so a hint
 cannot promise something F5 will refuse. Peripherals are configurable: add a
 button, a sensor, a display or a block of preloaded ROM, and edit any of it by
 hand while stopped.

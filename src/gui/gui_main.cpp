@@ -70,6 +70,8 @@ int main(int argc, char** argv) {
     parser.addOption(steps);
     parser.addOption(tab);
     parser.addOption(caret);
+    QCommandLineOption suggest("suggest", "open the suggestion bar at the caret");
+    parser.addOption(suggest);
     parser.process(app);
 
     rv::gui::MainWindow window;
@@ -104,6 +106,7 @@ int main(int argc, char** argv) {
                                 parts.value(1, "0").toInt());
             window.editor().setTextCursor(cursor);
             window.editor().setFocus();
+            if (parser.isSet(suggest)) window.editor().request_completion();
         }
         QCoreApplication::processEvents();
         return window.grab().save(parser.value(screenshot)) ? 0 : 1;

@@ -416,45 +416,65 @@ RV_TEST(gui, the_ghost_keeps_out_of_the_way_of_real_text) {
     RV_CHECK_STR(fixture.editor().ghost_text().toStdString(), "");
 }
 
-RV_TEST(gui, accepting_an_instruction_leaves_the_caret_at_its_operands) {
+RV_TEST(gui, the_bar_folds_away_once_the_instruction_is_settled) {
+    // The bar is for choosing the instruction. In an operand position the
+    // ghost has already answered, so a list there would be a second answer to
+    // the same question -- and it would cost the editor a line to say it.
     Fixture fixture;
-    fixture.editor().setPlainText("        addi");
+    fixture.editor().setPlainText("        ad");
     QTextCursor cursor = fixture.editor().textCursor();
     cursor.movePosition(QTextCursor::End);
     fixture.editor().setTextCursor(cursor);
-
     fixture.editor().request_completion();
-    fixture.editor().insert_completion("addi");
+    RV_CHECK(fixture.editor().suggestion_bar()->is_open());
 
-    RV_CHECK_STR(fixture.editor().toPlainText().toStdString(), "        addi ");
-    RV_CHECK_STR(fixture.editor().ghost_text().toStdString(), "rd, rs1, imm");
-}
-
-RV_TEST(gui, completion_offers_registers_where_a_register_belongs) {
-    Fixture fixture;
     fixture.editor().setPlainText("        addi a0, a");
-    QTextCursor cursor = fixture.editor().textCursor();
+    cursor = fixture.editor().textCursor();
     cursor.movePosition(QTextCursor::End);
     fixture.editor().setTextCursor(cursor);
-
     fixture.editor().request_completion();
-    const QStringList offered = fixture.editor().visible_completions();
-    RV_CHECK(offered.contains("a0"));
-    RV_CHECK(!offered.contains("add"));
+    RV_CHECK(!fixture.editor().suggestion_bar()->is_open());
+    RV_CHECK_STR(fixture.editor().ghost_text().toStdString(), ", imm(-2048..2047)");
 }
 
-RV_TEST(gui, completion_offers_the_programs_own_labels) {
-    Fixture fixture(
-        "_start: nop\n"
-        "loop:   nop\n"
-        "        ebreak\n");
-    fixture.editor().setPlainText("        beq a0, a1, lo");
+RV_TEST(gui, tab_walks_along_the_bar_and_lands_in_the_buffer) {
+    // Each step is written into the line, not merely highlighted off to the
+    // side: the choice is read where the code is.
+    Fixture fixture;
+    fixture.editor().setPlainText("        ad");
     QTextCursor cursor = fixture.editor().textCursor();
     cursor.movePosition(QTextCursor::End);
     fixture.editor().setTextCursor(cursor);
-
     fixture.editor().request_completion();
-    RV_CHECK(fixture.editor().visible_completions().contains("loop"));
+
+    const QStringList offered = fixture.editor().visible_completions();
+    RV_CHECK_EQ(offered.value(0).toStdString(), std::string("add"));
+
+    fixture.editor().cycle_suggestion(+1);
+    RV_CHECK_STR(fixture.editor().toPlainText().toStdString(), "        add");
+    RV_CHECK(fixture.editor().suggestion_bar()->is_open());  // still cycling
+
+    fixture.editor().cycle_suggestion(+1);
+    RV_CHECK_STR(fixture.editor().toPlainText().toStdString(), "        addi");
+
+    // Going past the end comes back round rather than stopping.
+    for (int i = 0; i < offered.size(); ++i) fixture.editor().cycle_suggestion(+1);
+    RV_CHECK_STR(fixture.editor().toPlainText().toStdString(), "        addi");
+}
+
+RV_TEST(gui, settling_on_an_instruction_folds_the_bar_and_starts_the_ghost) {
+    Fixture fixture;
+    fixture.editor().setPlainText("        ad");
+    QTextCursor cursor = fixture.editor().textCursor();
+    cursor.movePosition(QTextCursor::End);
+    fixture.editor().setTextCursor(cursor);
+    fixture.editor().request_completion();
+    RV_CHECK(fixture.editor().suggestion_bar()->is_open());
+
+    fixture.editor().insert_completion("addi");
+    RV_CHECK_STR(fixture.editor().toPlainText().toStdString(), "        addi ");
+    RV_CHECK(!fixture.editor().suggestion_bar()->is_open());
+    RV_CHECK_STR(fixture.editor().ghost_text().toStdString(), "rd, rs1, imm");
 }
 
 RV_TEST(gui, syntax_roles_come_from_the_assemblers_own_tables) {

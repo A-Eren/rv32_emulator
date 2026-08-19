@@ -1,15 +1,11 @@
 #include "gui/editor_widget.hpp"
 
-#include <QAbstractItemView>
-#include <QCompleter>
 #include <QFontDatabase>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 
 #include <algorithm>
-#include <QScrollBar>
-#include <QStringListModel>
 #include <QTextBlock>
 
 #include "gui/highlighter.hpp"
@@ -31,6 +27,101 @@ QColor colour_for(as::Severity severity) {
 }
 
 }  // namespace
+
+// ---------------------------------------------------------------------------
+// Suggestion bar
+// ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr int kBarPadding = 8;
+constexpr int kItemPadding = 7;
+constexpr int kItemGap = 4;
+
+}  // namespace
+
+SuggestionBar::SuggestionBar(QWidget* parent) : QWidget(parent) {
+    QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
+    font.setPointSize(10);
+    setFont(font);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    hide();
+}
+
+QSize SuggestionBar::sizeHint() const { return QSize(0, fontMetrics().height() + 8); }
+
+void SuggestionBar::show_for(std::vector<as::Completion> candidates) {
+    candidates_ = std::move(candidates);
+    current_ = 0;
+    setVisible(!candidates_.empty());
+    update();
+}
+
+void SuggestionBar::fold() {
+    candidates_.clear();
+    current_ = 0;
+    hide();
+}
+
+void SuggestionBar::advance(int delta) {
+    if (candidates_.empty()) return;
+    const int count = static_cast<int>(candidates_.size());
+    current_ = ((current_ + delta) % count + count) % count;
+    update();
+}
+
+const as::Completion* SuggestionBar::highlighted() const {
+    if (candidates_.empty()) return nullptr;
+    return &candidates_[static_cast<std::size_t>(current_)];
+}
+
+QStringList SuggestionBar::entries() const {
+    QStringList out;
+    out.reserve(static_cast<int>(candidates_.size()));
+    for (const as::Completion& candidate : candidates_) {
+        out << QString::fromStdString(candidate.text);
+    }
+    return out;
+}
+
+void SuggestionBar::paintEvent(QPaintEvent* /*event*/) {
+    if (candidates_.empty()) return;
+
+    QPainter painter(this);
+    painter.setFont(font());
+    painter.fillRect(rect(), QColor(0x1a, 0x1d, 0x22));
+    painter.setPen(QColor(0x2c, 0x31, 0x39));
+    painter.drawLine(0, 0, width(), 0);
+
+    const QFontMetrics metrics(font());
+    const int baseline = (height() + metrics.ascent() - metrics.descent()) / 2;
+    int x = kBarPadding;
+    std::size_t shown = 0;
+
+    for (std::size_t index = 0; index < candidates_.size(); ++index) {
+        const QString text = QString::fromStdString(candidates_[index].text);
+        const int width_of = metrics.horizontalAdvance(text) + 2 * kItemPadding;
+        // Leave room for the "+N" that says how many did not fit, or the bar
+        // would quietly lie about what is on offer.
+        if (x + width_of > width() - 6 * metrics.horizontalAdvance(QLatin1Char('9'))) break;
+
+        if (index == static_cast<std::size_t>(current_)) {
+            painter.fillRect(QRect(x, 3, width_of, height() - 6), QColor(0x2f, 0x4b, 0x6e));
+            painter.setPen(QColor(0xe6, 0xed, 0xf3));
+        } else {
+            painter.setPen(QColor(0x8b, 0x94, 0xa1));
+        }
+        painter.drawText(x + kItemPadding, baseline, text);
+        x += width_of + kItemGap;
+        ++shown;
+    }
+
+    if (shown < candidates_.size()) {
+        painter.setPen(QColor(0x5f, 0x67, 0x73));
+        painter.drawText(x + kItemPadding, baseline,
+                         QStringLiteral("+%1").arg(candidates_.size() - shown));
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Gutter
@@ -63,18 +154,10 @@ EditorWidget::EditorWidget(QWidget* parent) : QPlainTextEdit(parent), gutter_(ne
 
     new AsmHighlighter(document());
 
-    // A small popup rather than a full-width list: it appears while typing, so
-    // it must not cover the code being written.
-    completion_model_ = new QStringListModel(this);
-    completer_ = new QCompleter(completion_model_, this);
-    completer_->setWidget(this);
-    completer_->setCompletionMode(QCompleter::PopupCompletion);
-    completer_->setCaseSensitivity(Qt::CaseInsensitive);
-    completer_->popup()->setFont(font);
-    completer_->popup()->setMaximumHeight(6 * QFontMetrics(font).height() + 8);
-    connect(completer_, QOverload<const QString&>::of(&QCompleter::activated), this,
-            &EditorWidget::insert_completion);
-
+    // A strip along the bottom rather than a popup over the code: it is the
+    // one place that never covers what is being written, and it folds away the
+    // moment the instruction is settled.
+    bar_ = new SuggestionBar(this);
     connect(this, &QPlainTextEdit::cursorPositionChanged, this, &EditorWidget::update_ghost);
     connect(this, &QPlainTextEdit::textChanged, this, &EditorWidget::update_ghost);
 
@@ -109,14 +192,31 @@ void EditorWidget::update_gutter(const QRect& rect, int dy) {
 void EditorWidget::resizeEvent(QResizeEvent* event) {
     QPlainTextEdit::resizeEvent(event);
     const QRect area = contentsRect();
-    gutter_->setGeometry(QRect(area.left(), area.top(), gutter_width(), area.height()));
+    const int bar_height = bar_->is_open() ? bar_->sizeHint().height() : 0;
+    gutter_->setGeometry(
+        QRect(area.left(), area.top(), gutter_width(), area.height() - bar_height));
+    bar_->setGeometry(
+        QRect(area.left(), area.bottom() - bar_height + 1, area.width(), bar_height));
+    setViewportMargins(gutter_width(), 0, 0, bar_height);
+}
+
+void EditorWidget::layout_bar() {
+    // Opening and closing the bar changes how much room the text has, so the
+    // viewport has to be re-measured rather than merely repainted.
+    const QRect area = contentsRect();
+    const int bar_height = bar_->is_open() ? bar_->sizeHint().height() : 0;
+    gutter_->setGeometry(
+        QRect(area.left(), area.top(), gutter_width(), area.height() - bar_height));
+    bar_->setGeometry(
+        QRect(area.left(), area.bottom() - bar_height + 1, area.width(), bar_height));
+    setViewportMargins(gutter_width(), 0, 0, bar_height);
 }
 
 // ---------------------------------------------------------------------------
 // Completion
 // ---------------------------------------------------------------------------
 
-QStringList EditorWidget::visible_completions() const { return completion_model_->stringList(); }
+QStringList EditorWidget::visible_completions() const { return bar_->entries(); }
 
 void EditorWidget::update_ghost() {
     const QTextCursor cursor = textCursor();
@@ -148,66 +248,96 @@ void EditorWidget::request_completion() {
     const QByteArray line = cursor.block().text().toUtf8();
     const std::string_view view(line.constData(), static_cast<std::size_t>(line.size()));
     const auto column = static_cast<u16>(cursor.positionInBlock());
+    const as::Context context = as::context_at(view, column);
 
-    candidates_ = as::complete(view, column, symbols_);
-    if (candidates_.empty()) {
-        completer_->popup()->hide();
+    // The bar is for choosing the instruction and nothing else. Once the
+    // mnemonic is settled the operands answer for themselves, in the line,
+    // as ghost text -- so a second list here would be a second answer to a
+    // question already answered.
+    if (context.where != as::Context::Where::Mnemonic) {
+        close_bar();
         return;
     }
 
-    // The list shows the signature, because knowing that `addi` takes three
-    // operands is the useful half of the suggestion.
-    QStringList entries;
-    entries.reserve(static_cast<int>(candidates_.size()));
-    for (const as::Completion& candidate : candidates_) {
-        entries << QString::fromStdString(candidate.text);
+    std::vector<as::Completion> candidates = as::complete(view, column, symbols_);
+    if (candidates.empty()) {
+        close_bar();
+        return;
     }
-    completion_model_->setStringList(entries);
 
-    const as::Context context = as::context_at(view, column);
-    completer_->setCompletionPrefix(QString::fromStdString(context.prefix));
-    completer_->popup()->setCurrentIndex(completer_->completionModel()->index(0, 0));
-
-    QRect where = cursorRect();
-    where.setWidth(completer_->popup()->sizeHintForColumn(0) +
-                   completer_->popup()->verticalScrollBar()->sizeHint().width() + 24);
-    completer_->complete(where);
+    typed_prefix_ = QString::fromStdString(context.prefix);
+    previewing_ = false;
+    const bool was_open = bar_->is_open();
+    bar_->show_for(std::move(candidates));
+    if (!was_open) layout_bar();
 }
 
-void EditorWidget::insert_completion(const QString& text) {
-    // Accepting an instruction leaves the caret one space along, which is
-    // where its operands are: the ghost appears in the same keystroke that
-    // chose the instruction, so the suggestion runs straight into the filling
-    // in rather than stopping at the mnemonic.
-    const auto accepted = std::find_if(candidates_.begin(), candidates_.end(),
-                                       [&](const as::Completion& candidate) {
-                                           return QString::fromStdString(candidate.text) == text;
-                                       });
-    const bool takes_operands =
-        accepted != candidates_.end() &&
-        (accepted->kind == as::CompletionKind::Instruction ||
-         accepted->kind == as::CompletionKind::Pseudo) &&
-        !as::operand_hints(accepted->text).empty();
+void EditorWidget::close_bar() {
+    if (!bar_->is_open()) return;
+    bar_->fold();
+    previewing_ = false;
+    layout_bar();
+}
 
+void EditorWidget::cycle_suggestion(int delta) {
+    if (!bar_->is_open()) return;
+
+    // The first Tab takes the best match; the ones after it walk along the
+    // bar. Each step lands in the buffer rather than only in the bar, so the
+    // choice is read in the code being written and not off to the side.
+    if (previewing_) {
+        bar_->advance(delta);
+    }
+    previewing_ = true;
+    if (const as::Completion* choice = bar_->highlighted(); choice != nullptr) {
+        insert_completion(QString::fromStdString(choice->text), /*settle=*/false);
+    }
+}
+
+void EditorWidget::insert_completion(const QString& text, bool settle) {
+    const QTextCursor at = textCursor();
+    const QByteArray line = at.block().text().toUtf8();
+    const as::Context context = as::context_at(
+        std::string_view(line.constData(), static_cast<std::size_t>(line.size())),
+        static_cast<u16>(at.positionInBlock()));
+
+    // Settling leaves the caret one space along, which is where the operands
+    // are: choosing the instruction and starting to fill it in become the same
+    // keystroke, and the ghost appears without a further one.
+    const bool takes_operands = !as::operand_hints(text.toStdString()).empty();
+    const QString inserted = settle && takes_operands ? text + QLatin1Char(' ') : text;
+
+    inserting_ = true;
     QTextCursor cursor = textCursor();
-    const int prefix_length = completer_->completionPrefix().length();
-    cursor.setPosition(cursor.position() - prefix_length, QTextCursor::KeepAnchor);
-    cursor.insertText(takes_operands ? text + QLatin1Char(' ') : text);
+    cursor.setPosition(at.block().position() + context.prefix_begin);
+    cursor.setPosition(at.position(), QTextCursor::KeepAnchor);
+    cursor.insertText(inserted);
     setTextCursor(cursor);
+    inserting_ = false;
+
+    if (settle) close_bar();
     update_ghost();
 }
 
 void EditorWidget::keyPressEvent(QKeyEvent* event) {
-    if (completer_->popup()->isVisible()) {
-        // While the popup is up these keys belong to it, not to the editor.
+    if (bar_->is_open()) {
+        // While the bar is up these keys are its own.
         switch (event->key()) {
+            case Qt::Key_Tab:
+                cycle_suggestion(+1);
+                return;
+            case Qt::Key_Backtab:
+                cycle_suggestion(-1);
+                return;
             case Qt::Key_Enter:
             case Qt::Key_Return:
-            case Qt::Key_Tab:
+                if (const as::Completion* choice = bar_->highlighted(); choice != nullptr) {
+                    insert_completion(QString::fromStdString(choice->text));
+                    return;
+                }
+                break;
             case Qt::Key_Escape:
-            case Qt::Key_Up:
-            case Qt::Key_Down:
-                event->ignore();
+                close_bar();
                 return;
             default:
                 break;
@@ -232,10 +362,10 @@ void EditorWidget::keyPressEvent(QKeyEvent* event) {
         std::string_view(line.constData(), static_cast<std::size_t>(line.size())),
         static_cast<u16>(cursor.positionInBlock()));
 
-    if (context.prefix.size() >= 2) {
+    if (context.where == as::Context::Where::Mnemonic && context.prefix.size() >= 2) {
         request_completion();
-    } else if (completer_->popup()->isVisible()) {
-        completer_->popup()->hide();
+    } else {
+        close_bar();
     }
 }
 

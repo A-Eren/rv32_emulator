@@ -10,8 +10,6 @@
 #include <QStringList>
 #include <QWidget>
 
-class QCompleter;
-class QStringListModel;
 #include <map>
 #include <vector>
 
@@ -22,6 +20,39 @@ class QStringListModel;
 namespace rv::gui {
 
 class EditorWidget;
+
+/// The strip along the bottom of the editor listing the instructions that
+/// match what is being typed. It is only up while a mnemonic is being written:
+/// once the instruction is settled the operands take over as ghost text, and
+/// the strip folds away so the editor gets its line back.
+class SuggestionBar final : public QWidget {
+    Q_OBJECT
+
+public:
+    explicit SuggestionBar(QWidget* parent = nullptr);
+
+    /// Open on these candidates, or fold away if there are none.
+    void show_for(std::vector<as::Completion> candidates);
+    void fold();
+    /// Open in the sense of holding candidates -- which is not the same as
+    /// isVisible(), since a child of a window that has not been shown yet is
+    /// never visible, and the tests run without one.
+    bool is_open() const { return !candidates_.empty(); }
+
+    /// Move the highlight, wrapping at both ends.
+    void advance(int delta);
+    const as::Completion* highlighted() const;
+    QStringList entries() const;
+
+    QSize sizeHint() const override;
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+
+private:
+    std::vector<as::Completion> candidates_;
+    int current_ = 0;
+};
 
 /// The margin down the left. A separate widget because QPlainTextEdit reserves
 /// the space but does not paint it.
@@ -66,12 +97,17 @@ public:
     /// after every assemble.
     void set_symbols(const as::SymbolTable* symbols) { symbols_ = symbols; }
 
-    /// Offer completions for the caret's position. Bound to Ctrl+Space, and
-    /// triggered automatically once two characters of a word are typed.
+    /// Offer the instructions matching what is being typed. Bound to
+    /// Ctrl+Space, and triggered automatically at two characters.
     void request_completion();
-    /// Accept a candidate from the list, replacing the partial word. Public
-    /// because it is also the completer's own callback.
-    void insert_completion(const QString& text);
+    /// Replace the partial mnemonic with `text`. `settle` closes the bar and
+    /// leaves the caret at the operands; without it the bar stays up so Tab
+    /// can keep cycling.
+    void insert_completion(const QString& text, bool settle = true);
+    /// Walk along the bar, putting each candidate in the buffer as it goes.
+    void cycle_suggestion(int delta);
+    void close_bar();
+    SuggestionBar* suggestion_bar() const { return bar_; }
     /// The operands greyed in after the caret. Empty when there is nothing to
     /// fill in. Exposed for the tests, which check the text and not the pixels.
     QString ghost_text() const { return ghost_; }
@@ -94,15 +130,21 @@ private slots:
 
 private:
     void apply_diagnostic_marks();
+    /// Re-measure the viewport around the bar, which claims a line when open.
+    void layout_bar();
 
     GutterWidget* gutter_;
-    QCompleter* completer_ = nullptr;
-    QStringListModel* completion_model_ = nullptr;
+    SuggestionBar* bar_ = nullptr;
     QString ghost_;
+    /// Set while the widget is editing the buffer itself, so its own writes do
+    /// not count as the user typing and re-open the bar underneath them.
+    bool inserting_ = false;
+    /// Whether Tab has already put a candidate in the buffer, which decides
+    /// whether the next Tab takes the first one or the one after it.
+    bool previewing_ = false;
+    /// The word the bar opened on, so cycling past the end can put it back.
+    QString typed_prefix_;
     const as::SymbolTable* symbols_ = nullptr;
-    /// The candidates behind the model's strings, so accepting one can use its
-    /// signature rather than re-deriving it.
-    std::vector<as::Completion> candidates_;
     /// Line number -> the worst diagnostic reported on it.
     std::map<int, as::Diagnostic> diagnostics_;
     std::vector<int> breakpoints_;

@@ -22,26 +22,34 @@ pseudo-instruction — that is how `li a0, 0x12345` stops being a mystery.
 
 ## Writing assembly
 
-Type two characters of a word and a small list appears with what fits there.
-`Ctrl+Space` asks for it explicitly, including with nothing typed — which is
-how to answer "what can go here?"
+Two halves, and only ever one of them at a time.
+
+**Choosing the instruction.** Type two characters and a strip opens along the
+bottom of the editor with what matches. `Ctrl+Space` opens it explicitly.
 
 ```
         ad│
-        ┌──────┐
-        │ add  │
-        │ addi │
-        └──────┘
+ ─────────────────────
+  add   addi
+ ^^^^^ the one Tab will take
 ```
 
-The list knows where the caret is. In the leading position it offers
-instructions, pseudo-instructions and directives; in an operand position it
-offers only what belongs there — registers, CSR names, or the program's own
-labels.
+`Tab` walks along it, and each step lands **in the line** rather than only in
+the strip — the choice is read where the code is. `Enter` settles on the
+highlighted one and leaves the caret at its operands. `Esc` folds the strip
+away, keeping whatever is typed.
 
-Once the instruction is chosen, the operands it still wants appear in grey
-after the caret, the way a form shows what a field is for. They are not text —
-typing goes straight through them, and each one disappears as it is filled:
+| Key | What it does |
+|---|---|
+| `Ctrl+Space` | Open the strip here |
+| `Tab` / `Shift+Tab` | Walk forward / back, writing each into the line |
+| `Enter` | Settle on the highlighted one |
+| `Esc` | Fold the strip away |
+
+**Filling in the operands.** Once the instruction is settled the strip folds
+away — the editor gets its line back — and the operands it still wants appear
+in grey after the caret, the way a form shows what a field is for. They are not
+text: typing goes straight through them, and each disappears as it is filled.
 
 ```
         addi rd, rs1, imm          nothing written yet
@@ -55,14 +63,8 @@ question. `rd` and `label` say everything; `imm` does not tell you that 5000
 will be rejected, so it shows `imm(-2048..2047)` while it is the field being
 asked for.
 
-Both come from `instr_table.def`, the same rows the assembler encodes with, so
-a hint cannot promise something F5 will refuse.
-
-| Key | What it does |
-|---|---|
-| `Ctrl+Space` | Offer completions here |
-| `Enter` / `Tab` | Accept the highlighted one, leaving the caret at its operands |
-| `Esc` | Dismiss the list |
+Both halves come from `instr_table.def`, the same rows the assembler encodes
+with, so a hint cannot promise something F5 will refuse.
 
 ## Editing
 
