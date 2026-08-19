@@ -4,6 +4,9 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDir>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QFile>
 #include <QFontDatabase>
 #include <QFormLayout>
@@ -14,6 +17,7 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSpinBox>
 #include <QTableWidget>
 #include <QTextStream>
@@ -224,13 +228,6 @@ DevicePanel::DevicePanel(dbg::DebugSession& session, QWidget* parent)
     connect(remove_, &QPushButton::clicked, this, &DevicePanel::on_remove);
     buttons->addWidget(add);
     buttons->addWidget(remove_);
-
-    // Beside the sizes rather than only in the File menu: the depth being
-    // exported is the number in the list next to it, and the two belong on the
-    // same row for the same reason they belong on the same line of the label.
-    auto* export_button = new QPushButton("Export .mem…", this);
-    connect(export_button, &QPushButton::clicked, this, &DevicePanel::exportRequested);
-    buttons->addWidget(export_button);
     buttons->addStretch();
 
     // The two memories are part of the machine in the same way the peripherals
@@ -256,9 +253,18 @@ DevicePanel::DevicePanel(dbg::DebugSession& session, QWidget* parent)
     connect(dmem_, &QComboBox::currentIndexChanged, this, &DevicePanel::on_memory_resized);
     layout->addLayout(buttons);
 
+    // Scrollable, because a block offers sixteen fields and a row of buttons
+    // are not going to fit beside the list otherwise. Without this the list
+    // gets squeezed to two rows to make room, which loses the thing the panel
+    // is mainly for.
     controls_ = new QGroupBox("Controls", this);
     controls_layout_ = new QVBoxLayout(controls_);
-    layout->addWidget(controls_);
+    controls_layout_->setSpacing(3);
+    auto* scroll = new QScrollArea(this);
+    scroll->setWidget(controls_);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    layout->addWidget(scroll, 1);
 
     sync_memory_fields();
     refresh();
@@ -362,6 +368,95 @@ void DevicePanel::refresh_list() {
     list_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
 }
 
+void DevicePanel::add_block_row(std::size_t slot) {
+    auto* ram = dynamic_cast<core::RamDevice*>(session_->hart().bus().device_at_slot(slot));
+    if (ram == nullptr) return;
+
+    auto* row_widget = new QWidget(controls_);
+    auto* line = new QHBoxLayout(row_widget);
+    line->setContentsMargins(0, 0, 0, 0);
+    line->addWidget(new QLabel(QString("%1 × 32-bit").arg(ram->size() / 4), row_widget));
+    line->addStretch();
+
+    auto* load = new QPushButton("Load .mem…", row_widget);
+    auto* save = new QPushButton("Export .mem…", row_widget);
+    line->addWidget(load);
+    line->addWidget(save);
+    controls_layout_->addWidget(row_widget);
+
+    connect(save, &QPushButton::clicked, this, [this, slot] { export_block(slot); });
+    connect(load, &QPushButton::clicked, this, [this, slot] { load_block(slot); });
+}
+
+void DevicePanel::export_block(std::size_t slot) {
+    auto* ram = dynamic_cast<core::RamDevice*>(session_->hart().bus().device_at_slot(slot));
+    if (ram == nullptr) return;
+
+    const QString path = QFileDialog::getSaveFileName(this, "Export block", QDir::currentPath(),
+                                                      "Memory image (*.mem)");
+    if (path.isEmpty()) return;
+    if (write_block(slot, path)) {
+        QMessageBox::information(this, "rv32",
+                                 QString("Wrote %1 — %2 × 32-bit.")
+                                     .arg(QFileInfo(path).fileName())
+                                     .arg(ram->size() / 4));
+    }
+}
+
+bool DevicePanel::write_block(std::size_t slot, const QString& path) {
+    auto* ram = dynamic_cast<core::RamDevice*>(session_->hart().bus().device_at_slot(slot));
+    if (ram == nullptr) return false;
+
+    std::vector<Word> words;
+    words.reserve(ram->size() / 4);
+    for (u32 offset = 0; offset < ram->size(); offset += 4) words.push_back(ram->peek(offset));
+
+    core::MemFileOptions options;
+    // Padded to the block, which is the whole point: the file is this block,
+    // so it is as deep as this block whatever is written in it.
+    options.pad_to_full = true;
+    options.full_size = ram->size() / 4;
+
+    const core::MemFileResult result = core::write_mem_file(path.toStdString(), words, options);
+    if (!result.ok) {
+        QMessageBox::warning(this, "rv32", QString::fromStdString(result.error));
+        return false;
+    }
+    return true;
+}
+
+void DevicePanel::load_block(std::size_t slot) {
+    auto* ram = dynamic_cast<core::RamDevice*>(session_->hart().bus().device_at_slot(slot));
+    if (ram == nullptr) return;
+
+    const QString path = QFileDialog::getOpenFileName(this, "Load block", QDir::currentPath(),
+                                                      "Memory image (*.mem)");
+    if (path.isEmpty()) return;
+
+    std::vector<Word> words;
+    const core::MemFileResult result = core::read_mem_file(path.toStdString(), words);
+    if (!result.ok) {
+        QMessageBox::warning(this, "rv32", QString::fromStdString(result.error));
+        return;
+    }
+    if (words.size() * 4 > ram->size()) {
+        QMessageBox::warning(this, "rv32",
+                             QString("%1 holds %2 words; this block is %3. The rest was not read.")
+                                 .arg(QFileInfo(path).fileName())
+                                 .arg(words.size())
+                                 .arg(ram->size() / 4));
+        words.resize(ram->size() / 4);
+    }
+    ram->load_words(words);
+    rebuild_controls();
+    refresh();
+    emit inputChanged();
+}
+
+void DevicePanel::select_row(int row) {
+    if (row >= 0 && row < list_->rowCount()) list_->selectRow(row);
+}
+
 void DevicePanel::on_selection_changed() {
     remove_->setEnabled(list_->currentRow() >= 0);
     rebuild_controls();
@@ -384,8 +479,12 @@ void DevicePanel::rebuild_controls() {
 
     const int row = list_->currentRow();
     const std::vector<core::Device*> devices = session_->hart().bus().devices();
+    // A trailing stretch keeps the controls packed at the top of the scroll
+    // area rather than spread down it, which is what makes a block's sixteen
+    // fields look squashed rather than merely many.
     if (row < 0 || row >= static_cast<int>(devices.size())) {
         controls_layout_->addWidget(new QLabel("Select a peripheral.", controls_));
+        controls_layout_->addStretch();
         return;
     }
 
@@ -394,13 +493,23 @@ void DevicePanel::rebuild_controls() {
     // device -- detached, or replaced by loading a board file -- then finds
     // nothing and does nothing, instead of writing through a dangling one.
     const std::size_t slot = device->slot();
+
+    // A block gets a row of its own above the fields. Its contents are a
+    // memory image in their own right -- a table, a font, a sine wave -- and
+    // what you want on the far side is that block loaded into a BRAM of its
+    // own, not the program's data memory with the block somewhere inside it.
+    if (dynamic_cast<core::RamDevice*>(device) != nullptr) add_block_row(slot);
+
     const std::vector<core::InputControl> inputs = device->inputs();
     if (inputs.empty()) {
         controls_layout_->addWidget(
             new QLabel("This peripheral has no inputs — it only reports.", controls_));
+        controls_layout_->addStretch();
         return;
     }
 
+    QGridLayout* number_grid = nullptr;
+    int number_count = 0;
     for (std::size_t index = 0; index < inputs.size(); ++index) {
         const core::InputControl& control = inputs[index];
         const QString name = QString::fromStdString(control.name);
@@ -451,10 +560,26 @@ void DevicePanel::rebuild_controls() {
             }
 
             case core::InputKind::Number: {
+                // Several numbers go side by side rather than down a column: a
+                // block offers sixteen of them, and sixteen rows in a panel
+                // this wide is a lot of empty space to the right of a lot of
+                // scrolling.
+                if (number_grid == nullptr) {
+                    auto* holder = new QWidget(controls_);
+                    number_grid = new QGridLayout(holder);
+                    number_grid->setContentsMargins(0, 0, 0, 0);
+                    number_grid->setHorizontalSpacing(10);
+                    number_grid->setVerticalSpacing(3);
+                    controls_layout_->addWidget(holder);
+                }
+                const int columns = inputs.size() > 4 ? 2 : 1;
+                const int cell = number_count++;
                 auto* row_widget = new QWidget(controls_);
                 auto* line = new QHBoxLayout(row_widget);
                 line->setContentsMargins(0, 0, 0, 0);
-                line->addWidget(new QLabel(name, row_widget));
+                auto* label = new QLabel(name, row_widget);
+                label->setFont(mono());
+                line->addWidget(label);
 
                 auto* edit = new QLineEdit(QString::number(control.value), row_widget);
                 edit->setFont(mono());
@@ -479,11 +604,12 @@ void DevicePanel::rebuild_controls() {
                     input_changed();
                 });
                 line->addWidget(edit, 1);
-                controls_layout_->addWidget(row_widget);
+                number_grid->addWidget(row_widget, cell / columns, cell % columns);
                 break;
             }
         }
     }
+    controls_layout_->addStretch();
 }
 
 void DevicePanel::on_add() {

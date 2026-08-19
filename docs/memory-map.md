@@ -252,7 +252,7 @@ full array.
 
 ### Getting it into Vivado
 
-`File → Export .mem…` (`Ctrl+E`) writes both images, **always padded to the
+**Generate** on the toolbar, next to Assemble (`Ctrl+E`), writes both images, **always padded to the
 full depth**. That is the point of padding: the file is read into an array of a
 fixed depth, and a file shorter than the array leaves the tail holding whatever
 the tool put there. That reads as the program going wrong rather than as the
@@ -277,6 +277,23 @@ The list offers powers of two because that is how block memory comes: a depth
 that is not one wastes a whole block. A machine may still be given any size a
 file names — the list is what is worth offering, not what is allowed — and the
 panel will show it rather than round it silently.
+
+#### One block on its own
+
+A `ram` or `rom` block has its own pair of buttons in the Devices panel, beside
+its fields: **Load .mem…** and **Export .mem…**. A block's contents are a memory
+image in their own right — a lookup table, a font, a sine wave — and what is
+wanted on the far side is usually that block in a BRAM of its own, not the
+program's data memory with the block somewhere inside it.
+
+That file is padded to the block, not to dmem: a 128-byte block exports 32
+lines, whatever is written in it. The depth is printed above the buttons for
+the same reason it is on the size lists — it is what the Block Memory Generator
+asks for.
+
+Loading is the same door in the other direction, and is how a table gets in
+after the block already exists rather than only at the moment it is created. A
+file with more words than the block holds is truncated, and says so.
 
 From the command line, `--pad` alone pads to the default 16 KB. Pass the same
 board file the interface uses to pad to the machine that board describes:

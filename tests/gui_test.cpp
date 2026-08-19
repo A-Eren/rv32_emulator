@@ -17,6 +17,7 @@
 #include <QLineEdit>
 #include <QPointer>
 #include <QPushButton>
+#include <QToolBar>
 #include <QSpinBox>
 #include <QTableWidget>
 
@@ -537,16 +538,73 @@ RV_TEST(gui, the_exported_images_are_as_deep_as_the_machine) {
     QDir().rmdir(folder);
 }
 
-RV_TEST(gui, the_devices_panel_can_export) {
-    // Beside the size lists, because the depth being written is the number in
-    // the list next to the button.
+RV_TEST(gui, generate_sits_next_to_assemble) {
+    // The other half of the same sentence: one turns the text into a machine,
+    // the other turns the machine into files a synthesis tool will take.
     Fixture fixture;
-    auto* panel = fixture.window.findChild<DevicePanel*>();
-    bool found = false;
-    for (QPushButton* button : panel->findChildren<QPushButton*>()) {
-        if (button->text().startsWith("Export")) found = true;
+    QStringList toolbar;
+    for (QToolBar* bar : fixture.window.findChildren<QToolBar*>()) {
+        for (QAction* action : bar->actions()) {
+            if (!action->isSeparator()) toolbar << action->text();
+        }
     }
-    RV_CHECK(found);
+    RV_CHECK_EQ(toolbar.indexOf("Generate"), toolbar.indexOf("Assemble") + 1);
+}
+
+RV_TEST(gui, a_block_exports_itself_at_its_own_depth) {
+    // Its contents are a memory image in their own right -- a table, a font, a
+    // sine wave -- and what is wanted on the far side is that block in a BRAM
+    // of its own, not the program's data memory with the block inside it.
+    Fixture fixture;
+    core::Bus& bus = fixture.session().hart().bus();
+    bus.detach_all();
+    auto* ram = static_cast<core::RamDevice*>(bus.attach(0, core::make_device("ram", 64)));
+    ram->set_input(0, 0xdeadbeef);
+
+    auto* panel = fixture.window.findChild<DevicePanel*>();
+    panel->refresh();
+
+    const QString path = QDir::tempPath() + "/rv32_block_test.mem";
+    QFile::remove(path);
+    RV_CHECK(panel->write_block(0, path));
+
+    QFile file(path);
+    RV_CHECK(file.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QStringList lines =
+        QString::fromUtf8(file.readAll()).split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    // 64 bytes is sixteen words, and the file is sixteen lines whatever is in
+    // it -- that is what makes it loadable into a block of that depth.
+    RV_CHECK_EQ(lines.size(), 16);
+    RV_CHECK_STR(lines.front().toStdString(), "deadbeef");
+    RV_CHECK_STR(lines.back().toStdString(), "00000000");
+    file.close();
+    QFile::remove(path);
+}
+
+RV_TEST(gui, only_a_block_gets_the_image_buttons) {
+    Fixture fixture;
+    core::Bus& bus = fixture.session().hart().bus();
+    bus.detach_all();
+    bus.attach(0, core::make_device("ram", 64));
+    bus.attach(4, core::make_device("switches"));
+
+    auto* panel = fixture.window.findChild<DevicePanel*>();
+    panel->refresh();
+    QTableWidget* list = panel->findChild<QTableWidget*>();
+    auto* controls = panel->findChild<QGroupBox*>();
+
+    const auto button_texts = [&] {
+        QStringList out;
+        for (QPushButton* button : controls->findChildren<QPushButton*>()) out << button->text();
+        return out;
+    };
+
+    list->selectRow(0);
+    RV_CHECK(button_texts().contains("Export .mem…"));
+    RV_CHECK(button_texts().contains("Load .mem…"));
+
+    list->selectRow(1);  // switches have no image to move
+    RV_CHECK(!button_texts().contains("Export .mem…"));
 }
 
 RV_TEST(gui, a_bank_is_offered_at_the_widths_hardware_comes_in) {

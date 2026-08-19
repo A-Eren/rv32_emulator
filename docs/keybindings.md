@@ -8,6 +8,7 @@ toolbar and in the **Run** menu, so nothing here has to be memorised first.
 | Key | Button | What it does |
 |---|---|---|
 | `F5` | Assemble | Assemble the buffer and load it |
+| `Ctrl+E` | Generate | Write `imem.mem` and `dmem.mem`, padded to this machine's depth |
 | `F8` | Step | One **source line**, entering calls |
 | `F7` | Step Instr | One **machine instruction** — this is where a pseudo-instruction shows its two halves |
 | `F10` | Step Over | One source line, running calls to completion |
@@ -76,7 +77,6 @@ Standard editing keys, plus:
 | Key | What it does |
 |---|---|
 | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` | New, open, save |
-| `Ctrl+E` | Export `imem.mem` and `dmem.mem`, padded to the machine's depth |
 | Click the margin | Toggle a breakpoint on that line |
 | Click a diagnostic | Jump to the line it points at |
 
@@ -91,7 +91,7 @@ broken edit never destroys the program you are already stepping.
 | Registers | Both spellings (`x10  a0`), zeros dimmed, and the register the last step wrote highlighted **and scrolled into view** |
 | Encoding | The instruction as labelled bitfields, and what it did. Follows the caret, so a line explains itself before it has ever run |
 | Memory | Data memory and the peripherals, following the last store. **Editable** — type a hex value into a cell to write it |
-| Devices | What is attached, with buttons to add, remove and export, the two memory sizes, and each device's own controls: switch toggles, buttons, value fields, and a block's first words |
+| Devices | What is attached, with buttons to add and remove, the two memory sizes, and each device's own controls: switch toggles, buttons, value fields, and a block's first words with its own `.mem` in and out |
 | Console | Whatever the program sent to the UART |
 | Symbols | Every symbol with the **space** it lives in — the thing that explains why `call msg` was rejected |
 

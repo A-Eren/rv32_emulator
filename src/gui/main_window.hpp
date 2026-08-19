@@ -41,6 +41,10 @@ public:
     /// depth of the memory it belongs to. Either path may be empty to skip it.
     /// Separate from the dialog that asks for the paths, so the writing can be
     /// checked without one.
+    /// Select a row of the peripheral list, so a screenshot can show its
+    /// controls.
+    void select_device(int row);
+
     bool write_mem_files(const QString& imem_path, const QString& dmem_path, bool annotate);
 
     explicit MainWindow(QWidget* parent = nullptr);

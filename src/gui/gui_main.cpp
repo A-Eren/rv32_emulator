@@ -76,6 +76,8 @@ int main(int argc, char** argv) {
     // its board alongside its code.
     QCommandLineOption board("board", "build the machine described in <file.toml>", "file");
     parser.addOption(board);
+    QCommandLineOption select("select-device", "select this row of the device list", "row");
+    parser.addOption(select);
     parser.process(app);
 
     rv::gui::MainWindow window;
@@ -113,6 +115,7 @@ int main(int argc, char** argv) {
             window.editor().setFocus();
             if (parser.isSet(suggest)) window.editor().request_completion();
         }
+        if (parser.isSet(select)) window.select_device(parser.value(select).toInt());
         QCoreApplication::processEvents();
         return window.grab().save(parser.value(screenshot)) ? 0 : 1;
     }

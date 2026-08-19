@@ -30,6 +30,7 @@ public:
     /// Put the machine's actual memory sizes back into the fields, after
     /// something other than the fields changed them.
     void sync_memory_fields();
+    void select_row(int row);
 
     /// Load and apply a device configuration file.
     bool load_config(const QString& path);
@@ -43,10 +44,7 @@ signals:
     void devicesChanged();
     /// Memory was resized, which invalidates the loaded program.
     void memoryResized();
-    /// Asked for the memories to be written out. The panel raises it rather
-    /// than doing it: the depth is a property of the machine, which is here,
-    /// but the words are the assembled program, which is not.
-    void exportRequested();
+
     /// A control was operated. Distinct from devicesChanged because it does not
     /// invalidate addresses, only values.
     void inputChanged();
@@ -63,6 +61,19 @@ private:
     /// inside one of their signals would delete the widget that is mid-signal.
     void refresh_list();
     void rebuild_controls();
+    /// The row a memory block gets above its fields: its depth, and the two
+    /// buttons that move its contents in and out as a $readmemh image.
+    void add_block_row(std::size_t slot);
+    void export_block(std::size_t slot);
+    void load_block(std::size_t slot);
+
+public:
+    /// Write one block's contents as a $readmemh image, padded to the block's
+    /// own depth. Separate from the dialog that asks where, so what comes out
+    /// can be checked without one.
+    bool write_block(std::size_t slot, const QString& path);
+
+private:
     /// Record the change, redraw the list, and tell the window. The one path
     /// every control takes when it is operated.
     void input_changed();

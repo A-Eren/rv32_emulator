@@ -129,7 +129,6 @@ void MainWindow::build_layout() {
     // Resizing a memory throws away what no longer fits, so the program that
     // was loaded is no longer necessarily the program in imem. Say so rather
     // than let the next step run off the end of a truncated one.
-    connect(devices_, &DevicePanel::exportRequested, this, &MainWindow::on_export_mem);
     connect(devices_, &DevicePanel::memoryResized, this, [this] {
         status_->setText("Memory resized — press F5 to assemble into the new machine.");
         refresh_all();
@@ -194,8 +193,7 @@ void MainWindow::build_actions() {
     file_menu->addAction("Load &peripherals…", this, &MainWindow::on_load_devices);
     file_menu->addAction("Save p&eripherals…", this, &MainWindow::on_save_devices);
     file_menu->addSeparator();
-    file_menu->addAction("&Export .mem…", QKeySequence("Ctrl+E"), this,
-                         &MainWindow::on_export_mem);
+    file_menu->addAction("&Generate .mem…", this, &MainWindow::on_export_mem);
     file_menu->addSeparator();
     file_menu->addAction("&Quit", QKeySequence::Quit, this, &QWidget::close);
 
@@ -214,6 +212,11 @@ void MainWindow::build_actions() {
     };
 
     add("Assemble", Qt::Key_F5, &MainWindow::assemble, "Assemble the buffer and load it");
+    // Next to Assemble because it is the other half of the same sentence: one
+    // turns the text into a machine, the other turns the machine into files a
+    // synthesis tool will take.
+    add("Generate", QKeySequence("Ctrl+E"), &MainWindow::on_export_mem,
+        "Write imem.mem and dmem.mem, padded to this machine's depth");
     toolbar->addSeparator();
     add("Step", Qt::Key_F8, &MainWindow::step_line, "One source line, entering calls");
     add("Step Instr", Qt::Key_F7, &MainWindow::step_instruction,
@@ -767,6 +770,11 @@ private:
 };
 
 }  // namespace
+
+void MainWindow::select_device(int row) {
+    show_tab("Devices");
+    devices_->select_row(row);
+}
 
 bool MainWindow::write_mem_files(const QString& imem_path, const QString& dmem_path,
                                  bool annotate) {

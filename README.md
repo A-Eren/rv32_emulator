@@ -14,8 +14,8 @@ The editor suggests the instruction in a small block under the caret that folds
 away once it is chosen, then greys the operands it still wants in after the caret — a form to
 fill rather than a manual to consult. Both are generated from the same table
 the assembler encodes with — so a hint
-cannot promise something F5 will refuse. `Ctrl+E` writes both memories as `$readmemh` images, padded to the depth the
-size list advertises — the same number the Block Memory Generator asks for, so
+cannot promise something F5 will refuse. **Generate**, next to Assemble, writes both memories as `$readmemh` images,
+padded to the depth the size list advertises — the same number the Block Memory Generator asks for, so
 the file drops into a BRAM without arithmetic in between.
 
 The machine is configurable too: both memory sizes, and
