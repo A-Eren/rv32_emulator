@@ -90,6 +90,11 @@ private:
     void refresh_all();
     void refresh_registers();
     void refresh_memory();
+    /// Mark the lines that do not fit in the machine as it is configured.
+    /// Called after assembling and after either memory is resized, because
+    /// both ends of that comparison can move.
+    void refresh_overflow();
+    void on_memory_scrolled();
     void refresh_console();
 
     void refresh_symbols();
@@ -130,7 +135,10 @@ private:
     QString path_;
     QString devices_path_;
     /// First address the memory table shows.
-    Addr memory_base_ = 0;
+    /// The first row drawn last time, so scrolling does not redraw what is
+    /// already right.
+    int memory_rows_filled_ = -1;
+    static constexpr int kMemoryRowsDrawn = 48;
     /// Buffer revision at the last successful assemble, so the status bar can
     /// say whether what is on screen has been built.
     int assembled_revision_ = -1;

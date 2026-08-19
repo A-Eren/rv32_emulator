@@ -20,6 +20,7 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollBar>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTabWidget>
@@ -122,6 +123,8 @@ void MainWindow::build_layout() {
     memory_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     memory_->verticalHeader()->setDefaultSectionSize(QFontMetrics(mono()).height() + 4);
     connect(memory_, &QTableWidget::cellChanged, this, &MainWindow::on_memory_edited);
+    connect(memory_->verticalScrollBar(), &QScrollBar::valueChanged, this,
+            &MainWindow::on_memory_scrolled);
 
     devices_ = new DevicePanel(*session_, this);
     connect(devices_, &DevicePanel::devicesChanged, this, &MainWindow::refresh_all);
@@ -432,6 +435,7 @@ void MainWindow::toggle_breakpoint(int line) {
 void MainWindow::refresh_all() {
     refresh_registers();
     refresh_memory();
+    refresh_overflow();
     refresh_console();
     refresh_symbols();
     if (devices_ != nullptr) devices_->refresh();
@@ -493,20 +497,83 @@ void MainWindow::refresh_registers() {
     }
 }
 
-void MainWindow::refresh_memory() {
-    const Addr highlight = session_->last_step().mem_written;
-    // Follow a store, but only when it landed outside the window already on
-    // screen: jumping on every store would make a loop unreadable.
-    if (highlight != core::kNoAddr &&
-        (highlight < memory_base_ || highlight >= memory_base_ + 32 * 16)) {
-        memory_base_ = highlight >= 0x80u ? (highlight & ~0xfu) - 0x80u : 0u;
+void MainWindow::refresh_overflow() {
+    if (!session_->has_program()) {
+        editor_->set_overflow_lines({}, {});
+        return;
     }
+
+    const as::AssembledProgram& program = session_->program();
+    const u32 imem_bytes = session_->hart().imem().size();
+    const u32 dmem_bytes = session_->hart().bus().dmem().size();
+
+    // The instructions that landed past the end of instruction memory. Found
+    // through the source map rather than by counting lines, because one line
+    // can be two instructions and the second may be the one that does not fit.
+    std::vector<int> lines;
+    for (const as::AddrEntry& entry : program.map.entries()) {
+        if (entry.addr >= imem_bytes) lines.push_back(static_cast<int>(entry.line));
+    }
+    const bool code_overflows = !lines.empty();
+    const bool data_overflows = program.dmem_bytes.size() > dmem_bytes;
+
+    std::sort(lines.begin(), lines.end());
+    lines.erase(std::unique(lines.begin(), lines.end()), lines.end());
+
+    QString reason;
+    if (code_overflows) {
+        reason = QString("%1 instructions past the end of imem (%2 KB holds %3)")
+                     .arg(program.imem_words.size() - imem_bytes / 4)
+                     .arg(imem_bytes / 1024)
+                     .arg(imem_bytes / 4);
+    }
+    if (data_overflows) {
+        if (!reason.isEmpty()) reason += "; ";
+        reason += QString("%1 bytes of data past the end of dmem (%2 KB)")
+                      .arg(program.dmem_bytes.size() - dmem_bytes)
+                      .arg(dmem_bytes / 1024);
+    }
+    editor_->set_overflow_lines(std::move(lines), reason);
+
+    // Data has no lines to mark -- .data sits in its own space and the map
+    // covers instructions -- so it says so in the message bar instead of
+    // nowhere.
+    if (data_overflows && !code_overflows) set_message(reason, true);
+}
+
+void MainWindow::refresh_memory() {
+    // The table is as long as the memory is. This is the whole of what the
+    // dmem size means on screen: shrink it and the view stops where the
+    // machine does, rather than scrolling on into addresses that read as zero
+    // because nothing is there to say otherwise.
+    const u32 dmem_bytes = session_->hart().bus().dmem().size();
+    const int rows = static_cast<int>(dmem_bytes / 16);
+    if (memory_->rowCount() != rows) {
+        const QSignalBlocker resize_blocker(memory_);
+        memory_->setRowCount(rows);
+        memory_rows_filled_ = -1;  // the rows moved; whatever was drawn is stale
+    }
+    if (rows == 0) return;
+
+    const Addr highlight = session_->last_step().mem_written;
+    if (highlight != core::kNoAddr && highlight < dmem_bytes) {
+        memory_->scrollToItem(memory_->item(static_cast<int>(highlight / 16), 0),
+                              QAbstractItemView::PositionAtCenter);
+    }
+
+    // Only the rows on screen are filled. A megabyte of data memory is 65 536
+    // of them, and filling all of them after every step would make stepping
+    // slower than the program.
+    const int first = std::max(0, memory_->rowAt(0));
+    const int last = std::min(rows - 1, first + kMemoryRowsDrawn);
+    if (first == memory_rows_filled_ && highlight == core::kNoAddr) return;
+    memory_rows_filled_ = first;
 
     // Blocking keeps the programmatic fill from being mistaken for the user
     // typing, which would write memory back to itself on every step.
     const QSignalBlocker blocker(memory_);
-    for (int row = 0; row < memory_->rowCount(); ++row) {
-        const Addr address = memory_base_ + static_cast<Addr>(row * 16);
+    for (int row = first; row <= last; ++row) {
+        const Addr address = static_cast<Addr>(row) * 16;
 
         const auto set = [&](int column, const QString& text, bool editable, bool changed) {
             QTableWidgetItem* item = memory_->item(row, column);
@@ -530,6 +597,8 @@ void MainWindow::refresh_memory() {
     }
 }
 
+void MainWindow::on_memory_scrolled() { refresh_memory(); }
+
 void MainWindow::on_memory_edited(int row, int column) {
     if (column < 1 || column > 4) return;
     QTableWidgetItem* item = memory_->item(row, column);
@@ -543,8 +612,7 @@ void MainWindow::on_memory_edited(int row, int column) {
         return;
     }
 
-    const Addr address =
-        memory_base_ + static_cast<Addr>(row * 16) + static_cast<Addr>((column - 1) * 4);
+    const Addr address = static_cast<Addr>(row) * 16 + static_cast<Addr>((column - 1) * 4);
     // poke rather than store: this is the debugger writing, so it must not
     // trigger whatever a device would do on a write from the program.
     session_->hart().bus().poke_word(address, value);

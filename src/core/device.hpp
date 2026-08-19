@@ -113,8 +113,21 @@ public:
     void set_slot(std::size_t slot) { slot_ = slot; }
     Addr base_address() const { return slot_address(slot_); }
 
+    /// What this one is called. A machine may hold several of a kind -- two
+    /// UARTs, one to a terminal and one to a sensor -- and once it does, the
+    /// type name stops identifying anything. Empty means "no name given", and
+    /// callers fall back to the type; storing the fallback instead would make
+    /// every device look deliberately named.
+    const std::string& label() const { return label_; }
+    void set_label(std::string label) { label_ = std::move(label); }
+    /// What to call it on screen: its name if it has one, its type if not.
+    std::string display_name() const {
+        return label_.empty() ? std::string(type_name()) : label_;
+    }
+
 private:
     std::size_t slot_ = 0;
+    std::string label_;
 };
 
 }  // namespace rv::core

@@ -183,7 +183,13 @@ const DeviceType* find_device_type(std::string_view name) {
 
 std::unique_ptr<Device> make_device(std::string_view type, u32 size, const std::string& name) {
     const DeviceType* found = find_device_type(type);
-    return found == nullptr ? nullptr : found->create(size, name);
+    if (found == nullptr) return nullptr;
+    std::unique_ptr<Device> device = found->create(size, name);
+    // Every type may be named, not only the one that has to be: a machine with
+    // two UARTs needs to say which is which, and that is the moment the type
+    // name stops identifying anything.
+    if (device != nullptr && !name.empty()) device->set_label(name);
+    return device;
 }
 
 // ---------------------------------------------------------------------------
@@ -416,9 +422,9 @@ DeviceConfig describe(const Bus& bus) {
             spec.size = ram->size();
             spec.read_only = ram->read_only();
         }
+        spec.name = device->label();
         if (const auto* custom = dynamic_cast<const CustomDevice*>(device)) {
             spec.size = custom->word_count();
-            spec.name = custom->name();
         }
         // A width is only worth writing when it is not the whole register --
         // a file full of `size = 32` says nothing.
@@ -473,9 +479,11 @@ std::string apply_device_config(Bus& bus, const DeviceConfig& config,
         std::unique_ptr<Device> device;
         if (spec.type == "display") {
             device = std::make_unique<DisplayDevice>(spec.digits);
+            device->set_label(spec.name);
         } else if (spec.type == "ram" || spec.type == "rom") {
             device = std::make_unique<RamDevice>(spec.size == 0 ? 256u : spec.size,
                                                  spec.type == "rom" || spec.read_only);
+            device->set_label(spec.name);
         } else {
             device = make_device(spec.type, spec.size, spec.name);
         }

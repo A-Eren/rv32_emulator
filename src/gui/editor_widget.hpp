@@ -91,6 +91,12 @@ public:
     void clear_diagnostics();
     const as::Diagnostic* diagnostic_on_line(int line) const;
 
+    /// Lines whose instructions or data land past the end of the memory they
+    /// belong in. Marked rather than removed: the program is what was written,
+    /// and cutting it silently would hide the thing worth seeing.
+    void set_overflow_lines(std::vector<int> lines, QString reason);
+    const std::vector<int>& overflow_lines() const { return overflow_; }
+
     void set_execution_line(int line);
     void set_breakpoint_lines(std::vector<int> lines);
 
@@ -152,6 +158,8 @@ private:
     /// Line number -> the worst diagnostic reported on it.
     std::map<int, as::Diagnostic> diagnostics_;
     std::vector<int> breakpoints_;
+    std::vector<int> overflow_;
+    QString overflow_reason_;
     int execution_line_ = 0;
 };
 

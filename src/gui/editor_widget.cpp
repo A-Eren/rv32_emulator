@@ -449,6 +449,9 @@ void EditorWidget::paint_gutter(QPaintEvent* event) {
                 painter.setPen(colour_for(diagnostic->second.severity));
                 painter.drawText(QRect(x, top, marker_width, height), Qt::AlignCenter,
                                  diagnostic->second.severity == as::Severity::Error ? "E" : "W");
+            } else if (std::find(overflow_.begin(), overflow_.end(), line) != overflow_.end()) {
+                painter.setPen(QColor(0xf2, 0x6d, 0x6d));
+                painter.drawText(QRect(x, top, marker_width, height), Qt::AlignCenter, "▮");
             }
             x += marker_width;
 
@@ -478,6 +481,21 @@ void EditorWidget::highlight_current_line() {
     line.cursor = textCursor();
     line.cursor.clearSelection();
     selections.append(line);
+
+    // Lines that fall past the end of the memory they belong in, in red
+    // across the whole width. Not an error -- what is written is valid, there
+    // is simply nowhere to put it -- so it marks rather than stops, and a
+    // bigger memory or a shorter program makes it go away.
+    for (const int number : overflow_) {
+        QTextBlock block = document()->findBlockByNumber(number - 1);
+        if (!block.isValid()) continue;
+        QTextEdit::ExtraSelection mark;
+        mark.format.setBackground(QColor(0x4a, 0x1f, 0x25));
+        mark.format.setProperty(QTextFormat::FullWidthSelection, true);
+        mark.cursor = QTextCursor(block);
+        mark.cursor.clearSelection();
+        selections.append(mark);
+    }
 
     // The span each diagnostic points at, restyled rather than covered -- the
     // offending word has to stay readable.
@@ -530,6 +548,13 @@ void EditorWidget::apply_diagnostic_marks() {
 const as::Diagnostic* EditorWidget::diagnostic_on_line(int line) const {
     const auto found = diagnostics_.find(line);
     return found == diagnostics_.end() ? nullptr : &found->second;
+}
+
+void EditorWidget::set_overflow_lines(std::vector<int> lines, QString reason) {
+    overflow_ = std::move(lines);
+    overflow_reason_ = std::move(reason);
+    apply_diagnostic_marks();
+    gutter_->update();
 }
 
 void EditorWidget::set_execution_line(int line) {

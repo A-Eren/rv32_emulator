@@ -32,7 +32,10 @@ namespace {
 /// "16 KB — 4096 x 32-bit". Both halves matter: the bytes are what the
 /// machine has, the depth is what a block memory is ordered by.
 QString memory_size_label(u32 bytes) {
-    return QString("%1 KB — %2 × 32-bit").arg(bytes / 1024).arg(bytes / 4);
+    // Below a kilobyte, say bytes. "0 KB" is not a size.
+    const QString amount =
+        bytes >= 1024 ? QString("%1 KB").arg(bytes / 1024) : QString("%1 B").arg(bytes);
+    return QString("%1 — %2 × 32-bit").arg(amount).arg(bytes / 4);
 }
 
 QFont mono(int size = 10) {
@@ -71,9 +74,8 @@ public:
         note_->setWordWrap(true);
         form->addRow("", note_);
 
+        // Offered for every type, not only the one that cannot do without it.
         name_ = new QLineEdit(this);
-        name_->setPlaceholderText("what this peripheral is called");
-        name_row_ = form->rowCount();
         form->addRow("Name", name_);
 
         // A list, for the same reason the memory sizes are one: these are
@@ -152,8 +154,9 @@ private:
             size_->setCurrentIndex(unit == core::SizeUnit::Bytes ? 2 : size_->count() - 1);
         }
 
+        name_->setPlaceholderText(named ? "what this peripheral is called"
+                                        : "optional — to tell two of a kind apart");
         if (auto* form = qobject_cast<QFormLayout*>(layout())) {
-            form->setRowVisible(name_row_, named);
             form->setRowVisible(size_row_, sized);
             form->setRowVisible(load_row_, block);
         }
@@ -196,7 +199,6 @@ private:
     QComboBox* size_ = nullptr;
     QLineEdit* load_ = nullptr;
     QLabel* note_ = nullptr;
-    int name_row_ = 0;
     int size_row_ = 0;
     int load_row_ = 0;
 };
@@ -340,8 +342,16 @@ void DevicePanel::refresh_list() {
         QStringList cells = {
             QString::number(device->slot()),
             QString::asprintf("0x%08x", device->base_address()),
-            QString::fromUtf8(device->type_name().data(),
-                              static_cast<int>(device->type_name().size())),
+            // The name when it has one, with the type in tow: a machine with
+            // two UARTs needs to say which is which, and a machine with one
+            // does not need to be told twice what it is.
+            device->label().empty()
+                ? QString::fromUtf8(device->type_name().data(),
+                                    static_cast<int>(device->type_name().size()))
+                : QString("%1  (%2)")
+                      .arg(QString::fromStdString(device->label()),
+                           QString::fromUtf8(device->type_name().data(),
+                                             static_cast<int>(device->type_name().size()))),
             QString::fromStdString(device->state_summary()),
         };
         // A device nothing resolves to is still attached and still worth

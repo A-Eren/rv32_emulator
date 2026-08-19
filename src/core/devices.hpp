@@ -330,11 +330,13 @@ public:
     void set_input(std::size_t index, u32 value) override;
     std::string state_summary() const override;
 
-    const std::string& name() const { return name_; }
+    /// The same string as label(); kept because a custom peripheral is the one
+    /// type for which a name is not optional -- it has nothing else to be
+    /// called.
+    const std::string& name() const { return label(); }
     u32 word_count() const { return static_cast<u32>(words_.size()); }
 
 private:
-    std::string name_;
     std::string description_;
     std::vector<u32> words_;
     bool raising_ = false;

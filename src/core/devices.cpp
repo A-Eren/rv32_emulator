@@ -303,8 +303,9 @@ void RamDevice::set_input(std::size_t index, u32 value) {
 // ---------------------------------------------------------------------------
 
 CustomDevice::CustomDevice(u32 word_count, std::string name)
-    : name_(std::move(name)), words_(std::max<u32>(1, word_count), 0) {
-    description_ = name_ + ": " + std::to_string(words_.size()) +
+    : words_(std::max<u32>(1, word_count), 0) {
+    set_label(std::move(name));
+    description_ = std::to_string(words_.size()) +
                    (words_.size() == 1 ? " register" : " registers");
 }
 
@@ -354,7 +355,7 @@ void CustomDevice::set_input(std::size_t index, u32 value) {
 }
 
 std::string CustomDevice::state_summary() const {
-    std::string out = name_ + ": ";
+    std::string out;
     for (std::size_t index = 0; index < words_.size() && index < 4; ++index) {
         if (index != 0) out += " ";
         out += summary("%08x", words_[index]);

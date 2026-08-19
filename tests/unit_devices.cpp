@@ -458,8 +458,10 @@ RV_TEST(devices, a_custom_peripheral_is_named_readable_and_writable) {
     auto* sensor = static_cast<CustomDevice*>(
         bus.attach(0, std::make_unique<CustomDevice>(2, "sensor")));
     RV_CHECK(sensor != nullptr);
+    // The name lives on the device rather than in its summary, since the list
+    // shows it in the column that used to hold only the type.
     RV_CHECK_STR(sensor->name(), "sensor");
-    RV_CHECK_NE(sensor->state_summary().find("sensor"), std::string::npos);
+    RV_CHECK_STR(sensor->display_name(), "sensor");
 
     // The person sets a register; the program reads it.
     sensor->set_input(1, 42);
@@ -632,4 +634,32 @@ RV_TEST(devices, the_offered_sizes_are_powers_of_two) {
         for (const u32 size : sizes) RV_CHECK_EQ(size & (size - 1), 0u);
     }
     RV_CHECK(common_sizes(SizeUnit::None).empty());
+}
+
+RV_TEST(devices, any_device_may_be_named_so_two_of_a_kind_can_be_told_apart) {
+    // Once a machine holds two UARTs -- one to a terminal, one to a sensor --
+    // the type name stops identifying anything.
+    Machine m;
+    Bus& bus = m.hart().bus();
+    bus.detach_all();
+    Device* console = bus.attach(0, make_device("uart", 0, "console"));
+    Device* plotter = bus.attach(1, make_device("uart", 0, "plotter"));
+    RV_CHECK_STR(console->display_name(), "console");
+    RV_CHECK_STR(plotter->display_name(), "plotter");
+
+    // Unnamed falls back to the type rather than storing it, which would make
+    // every device look deliberately named.
+    Device* plain = bus.attach(2, make_device("leds"));
+    RV_CHECK(plain->label().empty());
+    RV_CHECK_STR(plain->display_name(), "leds");
+
+    // And the names survive a round trip.
+    const DeviceConfig back =
+        parse_device_config(write_device_config(describe(bus)), "named.toml");
+    RV_CHECK(back.ok());
+    Machine other;
+    RV_CHECK_STR(apply_device_config(other.hart().bus(), back), "");
+    RV_CHECK_STR(other.hart().bus().device_at_slot(0)->display_name(), "console");
+    RV_CHECK_STR(other.hart().bus().device_at_slot(1)->display_name(), "plotter");
+    RV_CHECK(other.hart().bus().device_at_slot(2)->label().empty());
 }
