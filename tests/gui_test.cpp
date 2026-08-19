@@ -10,7 +10,10 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QListWidget>
+#include <QGroupBox>
+#include <QLineEdit>
 #include <QPointer>
+#include <QSpinBox>
 #include <QTableWidget>
 
 #include "core/device_config.hpp"
@@ -414,6 +417,69 @@ RV_TEST(gui, a_device_configuration_round_trips_through_the_panel) {
     const core::DeviceConfig reparsed = core::parse_device_config(text, "t.toml");
     RV_CHECK(reparsed.ok());
     RV_CHECK_EQ(reparsed.devices.size(), described.devices.size());
+}
+
+RV_TEST(gui, an_overlapping_device_is_allowed_and_shown_as_covered) {
+    // Refusing would stop the work; hiding it would be worse. It goes on, and
+    // the list says which one stopped answering.
+    Fixture fixture;
+    core::Bus& bus = fixture.session().hart().bus();
+    bus.detach_all();
+    core::Device* ram = bus.attach(0, core::make_device("ram", 64));
+    core::Device* leds = bus.attach(0, core::make_device("leds"));
+    RV_CHECK(ram != nullptr);
+    RV_CHECK(leds != nullptr);
+
+    fixture.window.step_line();
+    auto* panel = fixture.window.findChild<DevicePanel*>();
+    QTableWidget* list = panel->findChild<QTableWidget*>();
+    RV_CHECK_EQ(list->rowCount(), 2);
+
+    // The block is only partly covered -- three of its four slots still answer.
+    RV_CHECK_NE(list->item(0, 3)->text().indexOf("partly covered"), -1);
+    // The one on top reports normally -- it is the one answering.
+    RV_CHECK_EQ(list->item(1, 3)->text().indexOf("covered"), -1);
+}
+
+RV_TEST(gui, the_memory_fields_resize_the_machine) {
+    Fixture fixture;
+    auto* panel = fixture.window.findChild<DevicePanel*>();
+    QList<QSpinBox*> boxes = panel->findChildren<QSpinBox*>();
+    RV_CHECK_EQ(boxes.size(), 2);
+    if (boxes.size() != 2) return;
+
+    boxes[0]->setValue(8192);
+    RV_CHECK_EQ(fixture.session().hart().imem().size(), 8192u);
+    boxes[1]->setValue(4096);
+    RV_CHECK_EQ(fixture.session().hart().bus().dmem().size(), 4096u);
+}
+
+RV_TEST(gui, a_block_and_a_custom_peripheral_get_fields_to_type_into) {
+    Fixture fixture;
+    core::Bus& bus = fixture.session().hart().bus();
+    bus.detach_all();
+    bus.attach(0, core::make_device("custom", 3, "sensor"));
+
+    auto* panel = fixture.window.findChild<DevicePanel*>();
+    panel->refresh();
+    QTableWidget* list = panel->findChild<QTableWidget*>();
+    list->selectRow(0);
+
+    // Inside the Controls box: the memory size fields are spin boxes elsewhere
+    // in the panel, and each of those owns a line edit of its own.
+    auto* controls = panel->findChild<QGroupBox*>();
+    RV_CHECK(controls != nullptr);
+    if (controls == nullptr) return;
+
+    // Three registers to type into, and the interrupt line as a switch.
+    RV_CHECK_EQ(controls->findChildren<QLineEdit*>().size(), 3);
+    RV_CHECK_EQ(controls->findChildren<QCheckBox*>().size(), 1);
+
+    // Typing into one is what the program then reads.
+    QLineEdit* first = controls->findChildren<QLineEdit*>().front();
+    first->setText("0x2a");
+    emit first->editingFinished();
+    RV_CHECK_EQ(bus.load(core::slot_address(0), 4, false).value, 42u);
 }
 
 RV_TEST(gui, typing_ad_offers_add_and_addi_in_the_editor) {

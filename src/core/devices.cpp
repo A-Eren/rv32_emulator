@@ -237,4 +237,97 @@ std::string DisplayDevice::rendered() const {
 
 std::string DisplayDevice::state_summary() const { return summary("[%s]", rendered().c_str()); }
 
+
+std::vector<InputControl> RamDevice::inputs() const {
+    const std::size_t words = std::min<std::size_t>(bytes_.size() / 4, kInputWords);
+    std::vector<InputControl> out;
+    out.reserve(words);
+    for (std::size_t index = 0; index < words; ++index) {
+        out.push_back(InputControl{"word[" + std::to_string(index) + "]", InputKind::Number,
+                                   peek(static_cast<u32>(index * 4)), 32, 0, 0xffff'ffffu});
+    }
+    return out;
+}
+
+void RamDevice::set_input(std::size_t index, u32 value) {
+    // Through poke, so read-only blocks are settable by hand for the same
+    // reason the memory view can edit them: this is the person's path, not the
+    // program's.
+    poke(static_cast<u32>(index * 4), value);
+    // A block set by hand is meant to stay set, so a reset restores what was
+    // typed rather than what the file loaded.
+    const std::size_t at = index * 4;
+    if (at + 4 <= initial_.size()) {
+        for (u8 byte = 0; byte < 4; ++byte) {
+            initial_[at + byte] = static_cast<u8>(value >> (8 * byte));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CustomDevice
+// ---------------------------------------------------------------------------
+
+CustomDevice::CustomDevice(u32 word_count, std::string name)
+    : name_(std::move(name)), words_(std::max<u32>(1, word_count), 0) {
+    description_ = name_ + ": " + std::to_string(words_.size()) +
+                   (words_.size() == 1 ? " register" : " registers");
+}
+
+std::size_t CustomDevice::slot_count() const {
+    const std::size_t bytes = words_.size() * 4;
+    return std::max<std::size_t>(1, (bytes + kSlotSize - 1) / kSlotSize);
+}
+
+u32 CustomDevice::peek(u32 offset) const {
+    const std::size_t index = offset / 4;
+    return index < words_.size() ? words_[index] : 0u;
+}
+
+void CustomDevice::poke(u32 offset, u32 value) {
+    const std::size_t index = offset / 4;
+    if (index < words_.size()) words_[index] = value;
+}
+
+u32 CustomDevice::read(u32 offset, u8 /*width*/) { return peek(offset); }
+
+void CustomDevice::write(u32 offset, u8 /*width*/, u32 value) { poke(offset, value); }
+
+void CustomDevice::reset() {
+    std::fill(words_.begin(), words_.end(), 0u);
+    raising_ = false;
+}
+
+std::vector<InputControl> CustomDevice::inputs() const {
+    std::vector<InputControl> out;
+    out.reserve(words_.size() + 1);
+    for (std::size_t index = 0; index < words_.size(); ++index) {
+        out.push_back(InputControl{"reg[" + std::to_string(index) + "]", InputKind::Number,
+                                   words_[index], 32, 0, 0xffff'ffffu});
+    }
+    // Last, so the registers read as a block and the line reads as a switch on
+    // the side of it.
+    out.push_back(InputControl{"raise IRQ", InputKind::Toggle, raising_ ? 1u : 0u, 1, 0, 1});
+    return out;
+}
+
+void CustomDevice::set_input(std::size_t index, u32 value) {
+    if (index < words_.size()) {
+        words_[index] = value;
+        return;
+    }
+    if (index == words_.size()) raising_ = (value & 1u) != 0;
+}
+
+std::string CustomDevice::state_summary() const {
+    std::string out = name_ + ": ";
+    for (std::size_t index = 0; index < words_.size() && index < 4; ++index) {
+        if (index != 0) out += " ";
+        out += summary("%08x", words_[index]);
+    }
+    if (words_.size() > 4) out += " …";
+    if (raising_) out += "  IRQ";
+    return out;
+}
+
 }  // namespace rv::core

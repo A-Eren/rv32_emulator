@@ -85,4 +85,10 @@ void Memory::clear() {
     high_water_ = 0;
 }
 
+void Memory::resize(u32 size) {
+    bytes_.resize(size, 0);
+    size_ = size;
+    if (high_water_ > size) high_water_ = size;
+}
+
 }  // namespace rv::core

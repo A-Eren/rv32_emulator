@@ -13,6 +13,7 @@
 #include "dbg/session.hpp"
 
 class QPushButton;
+class QSpinBox;
 class QTableWidget;
 class QVBoxLayout;
 
@@ -25,20 +26,29 @@ public:
     explicit DevicePanel(dbg::DebugSession& session, QWidget* parent = nullptr);
 
     void refresh();
+    /// Put the machine's actual memory sizes back into the fields, after
+    /// something other than the fields changed them.
+    void sync_memory_fields();
 
     /// Load and apply a device configuration file.
     bool load_config(const QString& path);
+    /// What the last load had to say about overlapping addresses, or empty.
+    /// Deliberately not a dialog -- see load_config.
+    QString last_warning() const { return last_warning_; }
     bool save_config(const QString& path);
 
 signals:
     /// The set of devices changed, so anything showing addresses needs redrawing.
     void devicesChanged();
+    /// Memory was resized, which invalidates the loaded program.
+    void memoryResized();
     /// A control was operated. Distinct from devicesChanged because it does not
     /// invalidate addresses, only values.
     void inputChanged();
 
 private slots:
     void on_add();
+    void on_memory_resized();
     void on_remove();
     void on_selection_changed();
 
@@ -61,7 +71,10 @@ private:
     QWidget* controls_ = nullptr;
     QVBoxLayout* controls_layout_ = nullptr;
     QPushButton* remove_ = nullptr;
+    QSpinBox* imem_ = nullptr;
+    QSpinBox* dmem_ = nullptr;
     std::string controls_built_;
+    QString last_warning_;
 };
 
 }  // namespace rv::gui

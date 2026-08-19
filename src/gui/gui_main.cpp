@@ -72,9 +72,14 @@ int main(int argc, char** argv) {
     parser.addOption(caret);
     QCommandLineOption suggest("suggest", "open the suggestion bar at the caret");
     parser.addOption(suggest);
+    // A machine to build before the program is opened, so an exercise can ship
+    // its board alongside its code.
+    QCommandLineOption board("board", "build the machine described in <file.toml>", "file");
+    parser.addOption(board);
     parser.process(app);
 
     rv::gui::MainWindow window;
+    if (parser.isSet(board)) window.load_devices(parser.value(board));
     const QStringList files = parser.positionalArguments();
     if (!files.isEmpty()) {
         window.open_file(files.first());

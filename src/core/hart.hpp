@@ -76,6 +76,14 @@ class Hart {
 public:
     Hart(u32 imem_size = kDefaultImemSize, u32 dmem_size = kDefaultDmemSize);
 
+    /// Change how much memory the machine has. Contents that still fit are
+    /// kept; a program too big for a shrunk imem is truncated, which is the
+    /// same thing that would have happened had it been assembled at this size.
+    void resize_memories(u32 imem_size, u32 dmem_size) {
+        imem_.resize(imem_size);
+        bus_.resize_dmem(dmem_size);
+    }
+
     CpuState& cpu() { return cpu_; }
     const CpuState& cpu() const { return cpu_; }
     Memory& imem() { return imem_; }

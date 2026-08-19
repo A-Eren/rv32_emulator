@@ -53,6 +53,10 @@ public:
 
     void clear();
 
+    /// Change how much there is. Contents that still fit are kept, so growing
+    /// a memory does not throw away the program or the data already in it.
+    void resize(u32 size);
+
     /// Highest byte address written since the last clear(), relative to base.
     /// Used to decide how many lines a .mem export needs.
     u32 high_water() const { return high_water_; }

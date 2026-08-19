@@ -14,9 +14,10 @@ The editor suggests the instruction in a small block under the caret that folds
 away once it is chosen, then greys the operands it still wants in after the caret — a form to
 fill rather than a manual to consult. Both are generated from the same table
 the assembler encodes with — so a hint
-cannot promise something F5 will refuse. Peripherals are configurable: add a
-button, a sensor, a display or a block of preloaded ROM, and edit any of it by
-hand while stopped.
+cannot promise something F5 will refuse. The machine is configurable too: both memory sizes, and
+the peripherals — a button, a display, a block of preloaded ROM, or one you
+define yourself with registers you can type into and an interrupt line you can
+raise. All of it editable by hand while stopped.
 
 The centrepiece is an embedded editor: write assembly, press F5, and step
 through what you wrote.

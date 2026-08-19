@@ -24,17 +24,36 @@ class Bus {
 public:
     explicit Bus(u32 dmem_size);
 
+    /// Resize data memory, keeping what still fits.
+    void resize_dmem(u32 size) { dmem_.resize(size); }
+
     Memory& dmem() { return dmem_; }
     const Memory& dmem() const { return dmem_; }
 
     // ---- devices -----------------------------------------------------------
 
-    /// Attach a device, taking the slots it needs. Returns nullptr if the slot
-    /// is out of range or any of the slots it wants is occupied.
+    /// Attach a device at `slot`. Overlapping an occupied slot is allowed:
+    /// the later arrival wins the addresses they share, and the earlier one
+    /// stays attached but shadowed there. Refusing would be the tidier rule,
+    /// but a machine being built by hand spends most of its life in an
+    /// inconsistent state, and stopping the work to complain is worse than
+    /// showing what the overlap did. Returns nullptr only when the device
+    /// would run off the end of the window.
     Device* attach(std::size_t slot, std::unique_ptr<Device> device);
-    /// Remove whatever occupies `slot`, including the slots it spans.
+    /// Remove whatever `slot` currently resolves to, revealing anything it was
+    /// shadowing.
     bool detach(std::size_t slot);
+    /// Remove one particular device, which is what a list of them needs when
+    /// two share a slot.
+    bool detach_device(const Device* device);
     void detach_all();
+
+    /// Attached devices whose addresses overlap this range -- what a caller
+    /// warns about before adding one.
+    std::vector<Device*> devices_overlapping(std::size_t slot, std::size_t span) const;
+    /// How many of a device's own slots still resolve to it. Zero means it is
+    /// completely hidden; less than its span means partly.
+    std::size_t reachable_slots(const Device* device) const;
 
     Device* device_at_slot(std::size_t slot) const;
     Device* device_for_address(Addr addr) const;
@@ -96,6 +115,10 @@ public:
 
 private:
     void refresh_cache();
+    /// Resolve `slots_` from `owned_`, later arrivals winning. `owned_` is the
+    /// stacking order and this is the view of it, so attaching and detaching
+    /// only have to keep the order right.
+    void rebuild_slots();
 
     Memory dmem_;
     std::vector<std::unique_ptr<Device>> owned_;

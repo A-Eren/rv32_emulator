@@ -254,10 +254,58 @@ public:
     /// the machine restores a preloaded table rather than zeroing it.
     void load_words(const std::vector<Word>& words);
 
+    /// The first words, offered as fields to type into. A block is as much an
+    /// input as a bank of switches is -- an exercise that reads a table wants
+    /// the table set by hand, and going through the memory view to do it means
+    /// knowing the address the block landed at.
+    std::vector<InputControl> inputs() const override;
+    void set_input(std::size_t index, u32 value) override;
+
+    /// How many words the panel offers. The rest of a large block is still
+    /// reachable in the memory view; a hundred spin boxes would not be.
+    static constexpr std::size_t kInputWords = 16;
+
 private:
     std::vector<u8> bytes_;
     std::vector<u8> initial_;
     bool read_only_ = false;
+};
+
+/// A peripheral a student defines: a name, a few registers the program can read
+/// and write, each one settable by hand, and a line it can raise an interrupt
+/// on. Everything else in the catalogue is a fixed part someone else designed;
+/// this is the one that can be whatever an exercise needs.
+class CustomDevice final : public Device {
+public:
+    explicit CustomDevice(u32 word_count = 4, std::string name = "custom");
+
+    std::string_view type_name() const override { return "custom"; }
+    std::string_view description() const override { return description_; }
+    std::size_t slot_count() const override;
+
+    u32 read(u32 offset, u8 width) override;
+    void write(u32 offset, u8 width, u32 value) override;
+    void reset() override;
+
+    u32 peek(u32 offset) const override;
+    void poke(u32 offset, u32 value) override;
+
+    u32 aux_state() const override { return raising_ ? 1u : 0u; }
+    void set_aux_state(u32 value) override { raising_ = value != 0; }
+    u32 interrupt_lines(u64 /*now*/) const override { return raising_ ? kIrqExternal : 0u; }
+
+    std::vector<InputControl> inputs() const override;
+    void set_input(std::size_t index, u32 value) override;
+    std::string state_summary() const override;
+
+    const std::string& name() const { return name_; }
+    u32 word_count() const { return static_cast<u32>(words_.size()); }
+
+private:
+    std::string name_;
+    std::string description_;
+    std::vector<u32> words_;
+    bool raising_ = false;
 };
 
 /// A bank of 7-segment digits: one byte per digit, shown as glyphs rather than

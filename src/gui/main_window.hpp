@@ -33,6 +33,10 @@ class MainWindow final : public QMainWindow {
     Q_OBJECT
 
 public:
+    /// Build the machine described in a file. Returns false and says why if it
+    /// cannot be read.
+    bool load_devices(const QString& path);
+
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
 

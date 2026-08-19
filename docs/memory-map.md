@@ -9,7 +9,13 @@ never see IMEM.
 
 | Range | Size | Access |
 |---|---|---|
-| `0x00000000` – `0x00003FFF` | 16 KB = 4096 instructions | fetch only |
+| `0x00000000` – … | 16 KB by default = 4096 instructions | fetch only |
+
+**The size is configurable** — the two fields beside `Add…` in the Devices
+panel, or `[machine]` in a board file. Between 256 bytes and 1 MB, a multiple
+of four, since both spaces are exported a word per line. Growing a memory keeps
+what was in it; shrinking one drops what no longer fits, so press F5 afterwards
+to assemble into the machine you now have.
 
 Exported as `imem.mem`. Not readable with `lw`, not writable at all — there is
 no self-modifying code on this machine.
@@ -18,9 +24,9 @@ no self-modifying code on this machine.
 
 | Range | Size | Access |
 |---|---|---|
-| `0x00000000` – `0x00003FFF` | 16 KB | load / store |
+| `0x00000000` – … | 16 KB by default | load / store |
 
-Exported as `dmem.mem`. Address 0 here is a *different location* from address 0
+Configurable in the same place. Exported as `dmem.mem`. Address 0 here is a *different location* from address 0
 in IMEM.
 
 ## Peripherals
@@ -52,9 +58,35 @@ And the types that can be added:
 | `display` | 7-segment digits, one byte each |
 | `ram` | a memory block, `size` bytes, optionally preloaded with `load` |
 | `rom` | the same, but stores from the program are ignored |
+| `custom` | your own: a `name`, `size` registers the program can read and write, each one settable by hand, and a line it can raise an interrupt on |
 
 A memory block takes as many slots as its size needs, so a 128-byte block
 occupies eight.
+
+Every block's first sixteen words are offered as fields to type into, in the
+Devices panel, alongside the switches and buttons. A block is as much an input
+as a bank of switches is: an exercise that reads a table wants the table set by
+hand, and going through the memory view to do it means knowing the address the
+block happened to land at. What is typed survives a reset — it was not the
+program that put it there. The rest of a large block is still reachable in the
+memory view; a hundred fields would not be an improvement.
+
+`custom` is the one entry that is not a fixed part somebody else designed. It
+is what an exercise reaches for when the peripheral it needs is not in the
+list — and being able to raise an interrupt means a student can build the
+source of one, not only handle one that was provided.
+
+### Overlapping addresses
+
+Two devices may be given addresses that overlap. The later arrival wins the
+addresses they share; the earlier one stays attached, and the panel says
+`covered by another device` or `(partly covered)` for it.
+
+This is allowed rather than refused because a machine being built by hand
+spends most of its life half-built, and stopping the work to complain is worse
+than showing what the overlap did. It is a warning, at the point of making it
+and afterwards in the list — never a silent one, since a device that quietly
+stopped answering is the bug that costs an afternoon.
 
 ### Describing a machine
 
@@ -63,20 +95,36 @@ TOML — arrays of tables with scalar keys — parsed in about a hundred lines
 rather than taken as a dependency:
 
 ```toml
+[machine]
+imem = 8192             # bytes; omit either to keep what the machine has
+dmem = 4096
+
 [[device]]
 type = "switches"
-slot = 2
+address = 0xffff0020    # or slot = 2, which is the same place
 value = 0b1010          # a starting position
 
 [[device]]
+type = "custom"
+name = "sensor"
+address = 0xffff0030
+size = 2                # registers, for a custom peripheral
+
+[[device]]
 type = "rom"
-slot = 9
-size = 256
+address = 0xffff0090
+size = 256              # bytes, for a block
 load = "sine_table.mem" # resolved relative to this file
 ```
 
-Understood keys: `type`, `slot`, `size`, `value`, `load`, `readonly`, `digits`.
-Anything else is an error naming the line and listing what was expected.
+Understood keys: `type`, `address` or `slot`, `name`, `size`, `value`, `load`,
+`readonly`, `digits`, and `imem`/`dmem` under `[machine]`. Anything else is an
+error naming the line and listing what was expected.
+
+Addresses are written rather than slot numbers because an address is what the
+program uses and what every panel shows; a slot number is arithmetic. An
+address inside a slot names that slot, so `0xffff002c` and `0xffff0020` mean the
+same device.
 
 Applying a configuration **replaces** the devices rather than adding to them, so
 a file describes a machine reproducibly. `File → Save peripherals` writes the

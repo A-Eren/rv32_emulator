@@ -25,16 +25,45 @@ Device* Bus::attach(std::size_t slot, std::unique_ptr<Device> device) {
     if (device == nullptr) return nullptr;
     const std::size_t span = std::max<std::size_t>(1, device->slot_count());
     if (slot + span > kMmioSlots) return nullptr;
-    for (std::size_t index = slot; index < slot + span; ++index) {
-        if (slots_[index] != nullptr) return nullptr;
-    }
 
     device->set_slot(slot);
     Device* raw = device.get();
     owned_.push_back(std::move(device));
-    for (std::size_t index = slot; index < slot + span; ++index) slots_[index] = raw;
+    rebuild_slots();
     refresh_cache();
     return raw;
+}
+
+void Bus::rebuild_slots() {
+    slots_.fill(nullptr);
+    for (const std::unique_ptr<Device>& device : owned_) {
+        const std::size_t base = device->slot();
+        const std::size_t span = std::max<std::size_t>(1, device->slot_count());
+        for (std::size_t index = base; index < base + span && index < kMmioSlots; ++index) {
+            slots_[index] = device.get();
+        }
+    }
+}
+
+std::vector<Device*> Bus::devices_overlapping(std::size_t slot, std::size_t span) const {
+    std::vector<Device*> out;
+    for (const std::unique_ptr<Device>& device : owned_) {
+        const std::size_t base = device->slot();
+        const std::size_t other = std::max<std::size_t>(1, device->slot_count());
+        if (base < slot + span && slot < base + other) out.push_back(device.get());
+    }
+    return out;
+}
+
+std::size_t Bus::reachable_slots(const Device* device) const {
+    if (device == nullptr) return 0;
+    const std::size_t base = device->slot();
+    const std::size_t span = std::max<std::size_t>(1, device->slot_count());
+    std::size_t count = 0;
+    for (std::size_t index = base; index < base + span && index < kMmioSlots; ++index) {
+        if (slots_[index] == device) ++count;
+    }
+    return count;
 }
 
 void Bus::refresh_cache() {
@@ -53,15 +82,17 @@ const std::string& Bus::uart_output() const {
 
 bool Bus::detach(std::size_t slot) {
     if (slot >= kMmioSlots || slots_[slot] == nullptr) return false;
-    Device* target = slots_[slot];
-    for (Device*& occupant : slots_) {
-        if (occupant == target) occupant = nullptr;
-    }
-    owned_.erase(std::remove_if(owned_.begin(), owned_.end(),
-                                [target](const std::unique_ptr<Device>& held) {
-                                    return held.get() == target;
-                                }),
-                 owned_.end());
+    return detach_device(slots_[slot]);
+}
+
+bool Bus::detach_device(const Device* device) {
+    const auto gone = std::remove_if(owned_.begin(), owned_.end(),
+                                     [device](const std::unique_ptr<Device>& held) {
+                                         return held.get() == device;
+                                     });
+    if (gone == owned_.end()) return false;
+    owned_.erase(gone, owned_.end());
+    rebuild_slots();
     refresh_cache();
     return true;
 }

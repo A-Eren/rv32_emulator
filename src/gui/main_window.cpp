@@ -116,6 +116,13 @@ void MainWindow::build_layout() {
     devices_ = new DevicePanel(*session_, this);
     connect(devices_, &DevicePanel::devicesChanged, this, &MainWindow::refresh_all);
     connect(devices_, &DevicePanel::inputChanged, this, &MainWindow::refresh_all);
+    // Resizing a memory throws away what no longer fits, so the program that
+    // was loaded is no longer necessarily the program in imem. Say so rather
+    // than let the next step run off the end of a truncated one.
+    connect(devices_, &DevicePanel::memoryResized, this, [this] {
+        status_->setText("Memory resized — press F5 to assemble into the new machine.");
+        refresh_all();
+    });
 
     symbols_ = new QTableWidget(0, 4, this);
     symbols_->setHorizontalHeaderLabels({"name", "space", "value", "line"});
@@ -629,14 +636,21 @@ void MainWindow::on_diagnostic_activated(int row) {
     editor_->setFocus();
 }
 
+bool MainWindow::load_devices(const QString& path) {
+    if (!devices_->load_config(path)) return false;
+    devices_path_ = path;
+    const QString warning = devices_->last_warning();
+    set_message(warning.isEmpty() ? "machine built from " + path
+                                  : "machine built from " + path + " — " + warning);
+    refresh_all();
+    return true;
+}
+
 void MainWindow::on_load_devices() {
     const QString path = QFileDialog::getOpenFileName(this, "Load peripherals", devices_path_,
                                                       "Device configuration (*.toml)");
     if (path.isEmpty()) return;
-    if (devices_->load_config(path)) {
-        devices_path_ = path;
-        set_message("peripherals loaded from " + path);
-    }
+    load_devices(path);
 }
 
 void MainWindow::on_save_devices() {

@@ -31,10 +31,10 @@ QFont mono(int size = 10) {
     return font;
 }
 
-/// Ask for a device to add: type, slot, and the extras the type needs.
+/// Ask for a device to add: type, address, and the extras the type needs.
 class AddDeviceDialog final : public QDialog {
 public:
-    explicit AddDeviceDialog(QWidget* parent) : QDialog(parent) {
+    AddDeviceDialog(QWidget* parent, const core::Bus& bus) : QDialog(parent), bus_(&bus) {
         setWindowTitle("Add peripheral");
         auto* form = new QFormLayout(this);
 
@@ -49,24 +49,32 @@ public:
         }
         form->addRow("Type", type_);
 
-        slot_ = new QSpinBox(this);
-        slot_->setRange(0, static_cast<int>(core::kMmioSlots) - 1);
-        form->addRow("Slot", slot_);
-
-        address_ = new QLabel(this);
+        // An address, not a slot number: an address is what the program uses
+        // and what every other panel shows. The slot is arithmetic, and doing
+        // arithmetic to place a device is the interface's job, not the
+        // person's.
+        address_ = new QLineEdit(this);
         address_->setFont(mono());
         form->addRow("Address", address_);
 
+        note_ = new QLabel(this);
+        note_->setWordWrap(true);
+        form->addRow("", note_);
+
+        name_ = new QLineEdit(this);
+        name_->setPlaceholderText("what this peripheral is called");
+        name_row_ = form->rowCount();
+        form->addRow("Name", name_);
+
         size_ = new QSpinBox(this);
-        size_->setRange(16, 4096);
-        size_->setSingleStep(16);
+        size_->setRange(1, 4096);
         size_->setValue(256);
-        size_->setSuffix(" bytes");
         size_row_ = form->rowCount();
         form->addRow("Size", size_);
 
         load_ = new QLineEdit(this);
         load_->setPlaceholderText("optional .mem image to preload");
+        load_row_ = form->rowCount();
         form->addRow("Load", load_);
 
         auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
@@ -74,37 +82,95 @@ public:
         connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
         form->addRow(buttons);
 
-        connect(type_, &QComboBox::currentIndexChanged, this, &AddDeviceDialog::update_fields);
-        connect(slot_, &QSpinBox::valueChanged, this, &AddDeviceDialog::update_fields);
-        update_fields();
+        connect(type_, &QComboBox::currentIndexChanged, this, &AddDeviceDialog::retype);
+        connect(address_, &QLineEdit::textChanged, this, &AddDeviceDialog::update_fields);
+        connect(size_, &QSpinBox::valueChanged, this, &AddDeviceDialog::retype);
+        retype();
     }
 
     QString type() const { return type_->currentData().toString(); }
-    std::size_t slot() const { return static_cast<std::size_t>(slot_->value()); }
+    std::size_t slot() const { return core::slot_of_address(address()); }
     u32 size() const { return static_cast<u32>(size_->value()); }
+    QString name() const { return name_->text(); }
     QString load_path() const { return load_->text(); }
 
-private:
-    void update_fields() {
-        const core::DeviceType* selected = core::find_device_type(type().toStdString());
-        const bool memory = selected != nullptr && selected->takes_size;
-        // Only a memory block has a size or an image to load; showing those for
-        // a button would be noise.
-        size_->setVisible(memory);
-        load_->setVisible(memory);
-        if (auto* form = qobject_cast<QFormLayout*>(layout())) {
-            form->setRowVisible(size_row_, memory);
-            form->setRowVisible(size_row_ + 1, memory);
-        }
-        address_->setText(QString::asprintf("0x%08x", core::slot_address(slot())));
+    /// The address typed, rounded down to the slot it falls in. Anything
+    /// unparseable reads as the start of the window rather than as an error --
+    /// the note below the field says what was understood.
+    Addr address() const {
+        bool valid = false;
+        QString text = address_->text().trimmed();
+        if (text.startsWith("0x", Qt::CaseInsensitive)) text = text.mid(2);
+        const auto typed = static_cast<Addr>(text.toUInt(&valid, 16));
+        if (!valid || typed < core::kMmioBase) return core::kMmioBase;
+        const Addr offset = typed - core::kMmioBase;
+        if (offset >= core::kMmioSize) return core::kMmioBase;
+        return core::kMmioBase + (offset / core::kSlotSize) * core::kSlotSize;
     }
 
+private:
+    /// The number of slots the device as configured would take, so the dialog
+    /// can offer a free address and warn about the right range.
+    std::size_t span() const {
+        std::unique_ptr<core::Device> probe =
+            core::make_device(type().toStdString(), size(), name().toStdString());
+        return probe == nullptr ? 1 : std::max<std::size_t>(1, probe->slot_count());
+    }
+
+    /// The type or the size changed, so the sensible default address changed
+    /// with it.
+    void retype() {
+        const core::DeviceType* selected = core::find_device_type(type().toStdString());
+        const bool sized = selected != nullptr && selected->takes_size;
+        const bool named = selected != nullptr && selected->takes_name;
+        size_->setSuffix(named ? " registers" : " bytes");
+        if (auto* form = qobject_cast<QFormLayout*>(layout())) {
+            form->setRowVisible(name_row_, named);
+            form->setRowVisible(size_row_, sized);
+            form->setRowVisible(load_row_, sized && !named);
+        }
+        address_->setText(
+            QString::asprintf("0x%08x", core::slot_address(core::first_free_slot(*bus_, span()))));
+        update_fields();
+    }
+
+    void update_fields() {
+        const std::size_t width = span();
+        const Addr base = address();
+        QString note = QString::asprintf("slot %zu", core::slot_of_address(base));
+        if (width > 1) {
+            note += QString::asprintf(", through 0x%08x",
+                                      base + static_cast<Addr>(width * core::kSlotSize) - 1);
+        }
+
+        // An overlap is allowed. Saying so here, before the button is pressed,
+        // is the difference between a warning and a scolding.
+        const std::vector<core::Device*> clash =
+            bus_->devices_overlapping(core::slot_of_address(base), width);
+        if (!clash.empty()) {
+            QStringList names;
+            for (const core::Device* device : clash) {
+                names << QString::fromUtf8(device->type_name().data(),
+                                           static_cast<int>(device->type_name().size()));
+            }
+            note += "  —  overlaps " + names.join(", ") + "; the new one wins those addresses";
+            note_->setStyleSheet("color: #e0b055;");
+        } else {
+            note_->setStyleSheet("color: #7d8590;");
+        }
+        note_->setText(note);
+    }
+
+    const core::Bus* bus_;
     QComboBox* type_ = nullptr;
-    QSpinBox* slot_ = nullptr;
+    QLineEdit* address_ = nullptr;
+    QLineEdit* name_ = nullptr;
     QSpinBox* size_ = nullptr;
     QLineEdit* load_ = nullptr;
-    QLabel* address_ = nullptr;
+    QLabel* note_ = nullptr;
+    int name_row_ = 0;
     int size_row_ = 0;
+    int load_row_ = 0;
 };
 
 }  // namespace
@@ -135,13 +201,53 @@ DevicePanel::DevicePanel(dbg::DebugSession& session, QWidget* parent)
     buttons->addWidget(add);
     buttons->addWidget(remove_);
     buttons->addStretch();
+
+    // The two memories are part of the machine in the same way the peripherals
+    // are, so they are configured in the same place. Both spaces are exported a
+    // word per line, which is why the step is four bytes.
+    const auto memory_box = [this](const char* label) {
+        auto* box = new QSpinBox(this);
+        box->setRange(static_cast<int>(core::kMinMemorySize),
+                      static_cast<int>(core::kMaxMemorySize));
+        box->setSingleStep(1024);
+        box->setSuffix(" B");
+        box->setGroupSeparatorShown(true);
+        box->setPrefix(QString(label) + " ");
+        box->setKeyboardTracking(false);  // resize when the number is finished, not per digit
+        return box;
+    };
+    imem_ = memory_box("imem");
+    dmem_ = memory_box("dmem");
+    buttons->addWidget(imem_);
+    buttons->addWidget(dmem_);
+    connect(imem_, &QSpinBox::valueChanged, this, &DevicePanel::on_memory_resized);
+    connect(dmem_, &QSpinBox::valueChanged, this, &DevicePanel::on_memory_resized);
     layout->addLayout(buttons);
 
     controls_ = new QGroupBox("Controls", this);
     controls_layout_ = new QVBoxLayout(controls_);
     layout->addWidget(controls_);
 
+    sync_memory_fields();
     refresh();
+}
+
+void DevicePanel::sync_memory_fields() {
+    const QSignalBlocker block_imem(imem_);
+    const QSignalBlocker block_dmem(dmem_);
+    imem_->setValue(static_cast<int>(session_->hart().imem().size()));
+    dmem_->setValue(static_cast<int>(session_->hart().bus().dmem().size()));
+}
+
+void DevicePanel::on_memory_resized() {
+    // Rounded to a word rather than refused: both spaces are exported a word
+    // per line, so a size that is not a multiple of four describes a .mem file
+    // that cannot be written.
+    const auto imem = static_cast<u32>(imem_->value()) & ~3u;
+    const auto dmem = static_cast<u32>(dmem_->value()) & ~3u;
+    session_->hart().resize_memories(imem, dmem);
+    sync_memory_fields();
+    emit memoryResized();
 }
 
 void DevicePanel::refresh() {
@@ -185,13 +291,23 @@ void DevicePanel::refresh_list() {
 
     for (int row = 0; row < static_cast<int>(devices.size()); ++row) {
         core::Device* device = devices[static_cast<std::size_t>(row)];
-        const QStringList cells = {
+        QStringList cells = {
             QString::number(device->slot()),
             QString::asprintf("0x%08x", device->base_address()),
             QString::fromUtf8(device->type_name().data(),
                               static_cast<int>(device->type_name().size())),
             QString::fromStdString(device->state_summary()),
         };
+        // A device nothing resolves to is still attached and still worth
+        // showing -- silently listing it as though it answered would be worse
+        // than allowing the overlap in the first place.
+        const std::size_t reachable = session_->hart().bus().reachable_slots(device);
+        const std::size_t span = std::max<std::size_t>(1, device->slot_count());
+        if (reachable == 0) {
+            cells[3] = "covered by another device";
+        } else if (reachable < span) {
+            cells[3] += QString("  (partly covered)");
+        }
         for (int column = 0; column < cells.size(); ++column) {
             QTableWidgetItem* item = list_->item(row, column);
             if (item == nullptr) {
@@ -331,12 +447,12 @@ void DevicePanel::rebuild_controls() {
 }
 
 void DevicePanel::on_add() {
-    AddDeviceDialog dialog(this);
+    core::Bus& bus = session_->hart().bus();
+    AddDeviceDialog dialog(this, bus);
     if (dialog.exec() != QDialog::Accepted) return;
 
-    core::Bus& bus = session_->hart().bus();
-    std::unique_ptr<core::Device> device =
-        core::make_device(dialog.type().toStdString(), dialog.size());
+    std::unique_ptr<core::Device> device = core::make_device(
+        dialog.type().toStdString(), dialog.size(), dialog.name().toStdString());
     if (device == nullptr) {
         QMessageBox::warning(this, "rv32", "Unknown device type.");
         return;
@@ -346,9 +462,11 @@ void DevicePanel::on_add() {
     core::Device* attached = bus.attach(dialog.slot(), std::move(device));
     if (attached == nullptr) {
         QMessageBox::warning(this, "rv32",
-                             QString("Cannot attach at slot %1: it is occupied, or the device "
-                                     "does not fit before the end of the window.")
-                                 .arg(dialog.slot()));
+                             QString("A device at 0x%1 does not fit before the end of the "
+                                     "peripheral window, which ends at 0x%2.")
+                                 .arg(dialog.address(), 8, 16, QLatin1Char('0'))
+                                 .arg(core::kMmioBase + core::kMmioSize - 1, 8, 16,
+                                      QLatin1Char('0')));
         return;
     }
 
@@ -372,7 +490,10 @@ void DevicePanel::on_remove() {
     const std::vector<core::Device*> devices = session_->hart().bus().devices();
     if (row < 0 || row >= static_cast<int>(devices.size())) return;
 
-    session_->hart().bus().detach(devices[static_cast<std::size_t>(row)]->slot());
+    // By identity rather than by slot: two devices can share one, and the row
+    // the person selected is the one they mean.
+    session_->hart().bus().detach_device(devices[static_cast<std::size_t>(row)]);
+    rebuild_controls();
     refresh();
     emit devicesChanged();
 }
@@ -383,12 +504,22 @@ bool DevicePanel::load_config(const QString& path) {
         QMessageBox::warning(this, "rv32", QString::fromStdString(config.error));
         return false;
     }
-    const std::string error = core::apply_device_config(
-        session_->hart().bus(), config, core::directory_of(path.toStdString()));
+    std::vector<std::string> warnings;
+    const std::string error = core::apply_machine_config(
+        session_->hart(), config, core::directory_of(path.toStdString()), &warnings);
     if (!error.empty()) {
         QMessageBox::warning(this, "rv32", QString::fromStdString(error));
         return false;
     }
+    // Not a dialog. An overlap is something this deliberately allows, and a
+    // modal box for it would be a scolding rather than a warning. It goes in
+    // the message line, and the list keeps saying which device stopped
+    // answering for as long as it is true.
+    QStringList lines;
+    for (const std::string& warning : warnings) lines << QString::fromStdString(warning);
+    last_warning_ = lines.join("; ");
+    sync_memory_fields();
+    rebuild_controls();
     refresh();
     emit devicesChanged();
     return true;
@@ -401,7 +532,7 @@ bool DevicePanel::save_config(const QString& path) {
         return false;
     }
     QTextStream(&file) << QString::fromStdString(
-        core::write_device_config(core::describe(session_->hart().bus())));
+        core::write_device_config(core::describe(session_->hart())));
     return true;
 }
 

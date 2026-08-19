@@ -61,15 +61,40 @@ RV_TEST(devices, the_default_machine_has_the_documented_layout) {
     RV_CHECK_EQ(bus.timer()->base_address(), 0xffff'0040u);
 }
 
-RV_TEST(devices, a_slot_holds_one_device_at_a_time) {
+RV_TEST(devices, a_later_device_wins_the_slots_they_share) {
+    // Refusing an overlap would be the tidier rule, but a machine being built
+    // by hand spends most of its life half-built, and stopping the work to
+    // complain is worse than showing what the overlap did.
     Machine m;
     Bus& bus = m.hart().bus();
-    // Slot 1 already has the LEDs.
-    RV_CHECK(bus.attach(1, std::make_unique<LedDevice>()) == nullptr);
+    bus.detach_all();
 
-    RV_CHECK(bus.detach(1));
-    RV_CHECK(bus.leds() == nullptr);
-    RV_CHECK(bus.attach(1, std::make_unique<ValueDevice>()) != nullptr);
+    Device* uart = bus.attach(1, std::make_unique<UartDevice>());
+    RV_CHECK(uart != nullptr);
+    Device* leds = bus.attach(1, std::make_unique<LedDevice>());
+    RV_CHECK(leds != nullptr);
+
+    // The later one answers at the address; the earlier one is still attached.
+    RV_CHECK(bus.device_at_slot(1) == leds);
+    RV_CHECK_EQ(bus.devices().size(), std::size_t{2});
+    RV_CHECK_EQ(bus.reachable_slots(uart), std::size_t{0});
+    RV_CHECK_EQ(bus.reachable_slots(leds), std::size_t{1});
+
+    // And removing the one on top reveals what it was covering.
+    RV_CHECK(bus.detach_device(leds));
+    RV_CHECK(bus.device_at_slot(1) == uart);
+    RV_CHECK_EQ(bus.reachable_slots(uart), std::size_t{1});
+}
+
+RV_TEST(devices, an_overlap_is_reported_before_it_is_made) {
+    Machine m;
+    Bus& bus = m.hart().bus();
+    bus.detach_all();
+    bus.attach(0, std::make_unique<RamDevice>(64));  // four slots
+
+    // What the interface asks so it can warn rather than refuse.
+    RV_CHECK_EQ(bus.devices_overlapping(2, 1).size(), std::size_t{1});
+    RV_CHECK(bus.devices_overlapping(4, 1).empty());
 }
 
 RV_TEST(devices, a_memory_block_takes_as_many_slots_as_it_needs) {
@@ -84,9 +109,12 @@ RV_TEST(devices, a_memory_block_takes_as_many_slots_as_it_needs) {
     RV_CHECK(bus.device_at_slot(3) == ram);
     RV_CHECK(bus.device_at_slot(4) == nullptr);
 
-    // And the slots it spans are genuinely taken.
-    RV_CHECK(bus.attach(2, std::make_unique<LedDevice>()) == nullptr);
-    RV_CHECK(bus.attach(4, std::make_unique<LedDevice>()) != nullptr);
+    // A device landing inside it takes over the slot it lands on, and only
+    // that one -- the rest of the block still answers.
+    Device* leds = bus.attach(2, std::make_unique<LedDevice>());
+    RV_CHECK(bus.device_at_slot(2) == leds);
+    RV_CHECK(bus.device_at_slot(1) == ram);
+    RV_CHECK_EQ(bus.reachable_slots(ram), std::size_t{3});
 }
 
 RV_TEST(devices, an_address_with_nothing_attached_faults) {
@@ -355,13 +383,13 @@ RV_TEST(devices, configuration_errors_name_the_line_and_the_problem) {
     RV_CHECK(fails_with("[[device]]\ntype = \"uart\"\nslot = 99\n", "out of range"));
     RV_CHECK(fails_with("[[device]]\ntype = \"uart\"\nwibble = 1\n", "unknown key"));
     RV_CHECK(fails_with("[[device]]\ntype = uart\n", "must be quoted"));
-    RV_CHECK(fails_with("type = \"uart\"\n", "before any [[device]]"));
+    RV_CHECK(fails_with("type = \"uart\"\n", "before any [machine] or [[device]]"));
     RV_CHECK(fails_with("[[device]]\nslot = 0\n", "has no type"));
     // The line number is part of the message.
     RV_CHECK(fails_with("[[device]]\ntype = \"uart\"\nwibble = 1\n", "t.toml:3"));
 }
 
-RV_TEST(devices, a_conflicting_slot_is_reported_rather_than_silently_dropped) {
+RV_TEST(devices, an_overlapping_file_warns_and_still_builds_the_machine) {
     Machine m;
     const DeviceConfig config = parse_device_config(
         "[[device]]\n"
@@ -375,6 +403,153 @@ RV_TEST(devices, a_conflicting_slot_is_reported_rather_than_silently_dropped) {
         "test.toml");
     RV_CHECK(config.ok());
 
-    const std::string error = apply_device_config(m.hart().bus(), config);
-    RV_CHECK_NE(error.find("slot is occupied"), std::string::npos);
+    std::vector<std::string> warnings;
+    const std::string error = apply_device_config(m.hart().bus(), config, {}, &warnings);
+    RV_CHECK_STR(error, "");
+    RV_CHECK_EQ(warnings.size(), std::size_t{1});
+    RV_CHECK_NE(warnings.front().find("overlaps"), std::string::npos);
+    // Built anyway, with the later one on top.
+    RV_CHECK_EQ(m.hart().bus().devices().size(), std::size_t{2});
+    RV_CHECK_STR(std::string(m.hart().bus().device_at_slot(2)->type_name()), "leds");
+}
+
+// ---------------------------------------------------------------------------
+// Blocks as inputs, custom peripherals, and memory sizes
+// ---------------------------------------------------------------------------
+
+RV_TEST(devices, a_memory_block_offers_its_first_words_as_fields) {
+    // A block is as much an input as a bank of switches is: an exercise that
+    // reads a table wants the table set by hand.
+    Machine m;
+    Bus& bus = m.hart().bus();
+    bus.detach_all();
+    Device* ram = bus.attach(0, std::make_unique<RamDevice>(64));
+
+    const std::vector<InputControl> inputs = ram->inputs();
+    RV_CHECK_EQ(inputs.size(), std::size_t{16});
+    RV_CHECK_STR(inputs.front().name, "word[0]");
+
+    ram->set_input(2, 0xdeadbeef);
+    RV_CHECK_HEX(ram->peek(8), 0xdeadbeefu);
+    RV_CHECK_HEX(bus.peek_word(ram->base_address() + 8), 0xdeadbeefu);
+
+    // And what was typed survives a reset, since it was not the program that
+    // put it there.
+    ram->reset();
+    RV_CHECK_HEX(ram->peek(8), 0xdeadbeefu);
+}
+
+RV_TEST(devices, a_large_block_offers_a_workable_number_of_fields) {
+    RamDevice big(4096);
+    RV_CHECK_EQ(big.inputs().size(), RamDevice::kInputWords);
+}
+
+RV_TEST(devices, a_rom_is_still_settable_by_hand) {
+    // Same reason the memory view can edit one: this is the person's path.
+    RamDevice rom(64, /*read_only=*/true);
+    rom.set_input(0, 0x1234);
+    RV_CHECK_HEX(rom.peek(0), 0x1234u);
+}
+
+RV_TEST(devices, a_custom_peripheral_is_named_readable_and_writable) {
+    Machine m;
+    Bus& bus = m.hart().bus();
+    bus.detach_all();
+    auto* sensor = static_cast<CustomDevice*>(
+        bus.attach(0, std::make_unique<CustomDevice>(2, "sensor")));
+    RV_CHECK(sensor != nullptr);
+    RV_CHECK_STR(sensor->name(), "sensor");
+    RV_CHECK_NE(sensor->state_summary().find("sensor"), std::string::npos);
+
+    // The person sets a register; the program reads it.
+    sensor->set_input(1, 42);
+    RV_CHECK_EQ(bus.load(sensor->base_address() + 4, 4, false).value, 42u);
+
+    // The program writes one; it stays written.
+    bus.store(sensor->base_address(), 4, 7);
+    RV_CHECK_EQ(sensor->peek(0), 7u);
+}
+
+RV_TEST(devices, a_custom_peripheral_can_raise_an_interrupt) {
+    // The point of it being custom: a student can build the source, not only
+    // handle one somebody else provided.
+    Machine m;
+    Bus& bus = m.hart().bus();
+    bus.detach_all();
+    auto* device = static_cast<CustomDevice*>(
+        bus.attach(0, std::make_unique<CustomDevice>(1, "knock")));
+
+    RV_CHECK_HEX(bus.pending_interrupts(0), 0u);
+    device->set_input(1, 1);  // the line, which follows the registers
+    RV_CHECK_HEX(bus.pending_interrupts(0), kIrqExternal);
+}
+
+RV_TEST(devices, memory_sizes_come_from_the_machine_table) {
+    const DeviceConfig config = parse_device_config(
+        "[machine]\n"
+        "imem = 4096\n"
+        "dmem = 2048\n"
+        "\n"
+        "[[device]]\n"
+        "type = \"uart\"\n"
+        "address = 0xffff0000\n",
+        "test.toml");
+    RV_CHECK(config.ok());
+    RV_CHECK_EQ(config.imem_size, 4096u);
+    RV_CHECK_EQ(config.dmem_size, 2048u);
+    RV_CHECK_EQ(config.devices.front().slot, std::size_t{0});
+
+    Machine m;
+    RV_CHECK_STR(apply_machine_config(m.hart(), config), "");
+    RV_CHECK_EQ(m.hart().imem().size(), 4096u);
+    RV_CHECK_EQ(m.hart().bus().dmem().size(), 2048u);
+}
+
+RV_TEST(devices, an_address_names_a_slot_and_a_bad_size_is_refused) {
+    RV_CHECK_EQ(slot_of_address(kMmioBase), std::size_t{0});
+    RV_CHECK_EQ(slot_of_address(kMmioBase + 0x40), std::size_t{4});
+    // Inside a slot means that slot -- a person naming an address inside a
+    // device means that device.
+    RV_CHECK_EQ(slot_of_address(kMmioBase + 0x4c), std::size_t{4});
+
+    const DeviceConfig odd = parse_device_config("[machine]\nimem = 1000\n", "t.toml");
+    RV_CHECK(odd.ok());  // 1000 is a multiple of 4
+    const DeviceConfig tiny = parse_device_config("[machine]\nimem = 8\n", "t.toml");
+    RV_CHECK(!tiny.ok());
+    RV_CHECK_NE(tiny.error.find("between"), std::string::npos);
+
+    const DeviceConfig ragged = parse_device_config("[machine]\nimem = 4098\n", "t.toml");
+    RV_CHECK(!ragged.ok());
+    RV_CHECK_NE(ragged.error.find("multiple of 4"), std::string::npos);
+}
+
+RV_TEST(devices, growing_a_memory_keeps_what_was_in_it) {
+    Machine m;
+    m.hart().bus().dmem().write_word_raw(0x10, 0xcafebabe);
+    m.hart().resize_memories(kDefaultImemSize, 32 * 1024);
+    RV_CHECK_HEX(m.hart().bus().dmem().read_word_raw(0x10), 0xcafebabeu);
+    RV_CHECK_EQ(m.hart().bus().dmem().size(), 32u * 1024);
+}
+
+RV_TEST(devices, a_machine_round_trips_through_a_file) {
+    Machine m;
+    m.hart().resize_memories(8192, 4096);
+    m.hart().bus().detach_all();
+    m.hart().bus().attach(0, std::make_unique<CustomDevice>(3, "sensor"));
+
+    const std::string text = write_device_config(describe(m.hart()));
+    RV_CHECK_NE(text.find("[machine]"), std::string::npos);
+    RV_CHECK_NE(text.find("imem = 8192"), std::string::npos);
+    RV_CHECK_NE(text.find("address = 0xffff0000"), std::string::npos);
+    RV_CHECK_NE(text.find("name = \"sensor\""), std::string::npos);
+
+    const DeviceConfig back = parse_device_config(text, "round.toml");
+    RV_CHECK(back.ok());
+    Machine other;
+    RV_CHECK_STR(apply_machine_config(other.hart(), back), "");
+    RV_CHECK_EQ(other.hart().imem().size(), 8192u);
+    auto* custom = other.hart().bus().find<CustomDevice>();
+    RV_CHECK(custom != nullptr);
+    RV_CHECK_STR(custom->name(), "sensor");
+    RV_CHECK_EQ(custom->word_count(), 3u);
 }

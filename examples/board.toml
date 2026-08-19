@@ -4,6 +4,10 @@
 # command line tools with --devices. Applying a configuration replaces the
 # default set entirely, so what is here is exactly what the machine gets.
 
+[machine]
+imem = 16384
+dmem = 16384
+
 [[device]]
 type = "uart"
 slot = 0
@@ -54,3 +58,12 @@ slot = 8
 type = "ram"
 slot = 9
 size = 128
+
+# Your own peripheral: two registers the program reads and writes, both
+# settable by hand in the Devices panel, and a line it can raise an interrupt
+# on. This is the entry for when what an exercise needs is not in the list.
+[[device]]
+type = "custom"
+name = "sensor"
+address = 0xffff0110
+size = 2
