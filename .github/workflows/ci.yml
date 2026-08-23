@@ -3,6 +3,7 @@ name: build and test
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -135,6 +136,17 @@ jobs:
           "$windeployqt" --release --no-translations --compiler-runtime \
             "$(cygpath -w dist/rv32-gui.exe)"
 
+          # windeployqt deploys the platform plugin it thinks the app needs, which
+          # is qwindows.dll and nothing else. The headless check below asks for
+          # the offscreen one, and a Qt that cannot load its platform plugin
+          # does not exit with a message: this is a GUI-subsystem binary with no
+          # console, so it opens a dialog and waits for a click that never
+          # comes. Both plugins are tiny; ship them.
+          for plugin in qoffscreen.dll qminimal.dll; do
+            found=$(find /ucrt64 -name "$plugin" -path '*platforms*' | head -1)
+            [ -n "$found" ] && cp "$found" dist/platforms/ && echo "bundled $plugin"
+          done
+
           # windeployqt knows about Qt. Anything else still resolving into the
           # MSYS2 tree would be a DLL missing on a machine that has no MSYS2,
           # so copy those in too.
@@ -176,9 +188,17 @@ jobs:
             -NoNewWindow -Wait -PassThru
           if ($cli.ExitCode -ne 0) { throw "rv32.exe exited $($cli.ExitCode)" }
 
+          # Not -Wait: a GUI-subsystem binary that fails at startup shows a
+          # dialog instead of writing to a console, so the failure mode to
+          # guard against is "never exits", and -Wait would spend the whole
+          # step timeout on it before saying anything useful.
           $gui = Start-Process dist\rv32-gui.exe `
             -ArgumentList 'examples\fib.s','--screenshot','frame.png','--steps','6' `
-            -Wait -PassThru
+            -PassThru
+          if (-not $gui.WaitForExit(60000)) {
+            $gui.Kill()
+            throw "rv32-gui.exe did not exit within 60s -- it is most likely showing a dialog nobody can click"
+          }
           if ($gui.ExitCode -ne 0) { throw "rv32-gui.exe exited $($gui.ExitCode)" }
           if (-not (Test-Path frame.png)) { throw "no frame was rendered" }
 
@@ -187,3 +207,53 @@ jobs:
           name: rv32-windows-x64
           path: dist/
           if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # The download.
+  #
+  # An artifact expires and needs a GitHub login and a rummage through a run's
+  # page to reach. A release is a stable URL with a zip on it. Cut one with:
+  #
+  #     git tag v0.1.0 && git push origin v0.1.0
+  #
+  # `needs: windows` is what makes this safe: the zip is the very directory
+  # that just passed the clean-PATH check, so a release cannot be published
+  # from a build that does not start.
+  # -------------------------------------------------------------------------
+  release:
+    needs: [test, windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: rv32-windows-x64
+          path: rv32-windows-x64
+
+      - name: Zip it
+        run: |
+          set -e
+          chmod +x rv32-windows-x64/*.exe
+          zip -qr rv32-windows-x64.zip rv32-windows-x64
+          unzip -l rv32-windows-x64.zip | tail -3
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: rv32-windows-x64.zip
+          generate_release_notes: true
+          body: |
+            ## Windows
+
+            Download **rv32-windows-x64.zip**, unzip it anywhere, and
+            double-click `rv32-gui.exe`. Nothing to install: the Qt DLLs and
+            the plugins travel with it, and this exact directory is the one
+            CI just ran with nothing but Windows on `PATH`.
+
+            `rv32.exe` is the command-line half. It is linked statically, so it
+            is a single file you can copy onto a lab machine on its own.
+
+            Keep the DLLs and the `platforms\` folder next to `rv32-gui.exe` --
+            it will not start without them.

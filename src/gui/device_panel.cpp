@@ -32,7 +32,7 @@ namespace {
 /// The device list's columns. The name has one of its own: a name and a type
 /// are different things, and a type is not a name that happens to be shared.
 constexpr int kNameColumn = 2;
-constexpr int kTypeColumn = 3;
+[[maybe_unused]] constexpr int kTypeColumn = 3;  // documents the layout
 constexpr int kStateColumn = 4;
 
 QFont mono(int size = 10) {

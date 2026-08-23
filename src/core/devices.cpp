@@ -7,7 +7,20 @@
 namespace rv::core {
 namespace {
 
-std::string summary(const char* format, ...) {
+// printf-style, so clang can check the callers and stop warning that the
+// format reaching vsnprintf is not a literal.
+//
+// gnu_printf on MinGW rather than printf: there the plain spelling means
+// ms_printf, which predates C99 and rejects %zu. The runtime underneath is
+// UCRT, which handles %zu correctly -- this tells the checker the same thing
+// the toolchain choice already says.
+#ifdef __MINGW32__
+#define RV_PRINTF_LIKE(fmt, first) __attribute__((format(gnu_printf, fmt, first)))
+#else
+#define RV_PRINTF_LIKE(fmt, first) __attribute__((format(printf, fmt, first)))
+#endif
+
+RV_PRINTF_LIKE(1, 2) std::string summary(const char* format, ...) {
     char buffer[192];
     va_list args;
     va_start(args, format);

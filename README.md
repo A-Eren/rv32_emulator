@@ -62,12 +62,19 @@ Presets: `debug` (warnings as errors), `asan` (+ASan/UBSan), `release`.
 
 ### Windows
 
-Every push builds a Windows bundle. Open the latest green run under
-[Actions](https://github.com/A-Eren/rv32_emulator/actions/workflows/ci.yml), pick the
-`windows / mingw-ucrt64` job, and download the **rv32-windows-x64** artifact:
-unzip it anywhere and double-click `rv32-gui.exe`. Nothing to install — the Qt
-DLLs travel with it. `rv32.exe`, the command-line half, is linked statically
-and is a single file you can copy on its own.
+Nothing to build and nothing to install. Go to
+[Releases](https://github.com/A-Eren/rv32_emulator/releases/latest), download
+**rv32-windows-x64.zip**, unzip it anywhere and double-click `rv32-gui.exe`.
+The Qt DLLs and the platform plugins travel with it, and the directory in the
+zip is the one CI just ran with nothing but Windows on `PATH` — so it starts on
+a machine that has never seen a compiler.
+
+`rv32.exe`, the command-line half, is linked statically and is a single file
+you can copy onto a lab machine on its own.
+
+Every push to `main` also leaves the same directory as a build artifact on the
+[Actions](https://github.com/A-Eren/rv32_emulator/actions/workflows/ci.yml)
+run, which is the way to get a build that has no tag yet.
 
 To build it yourself, install [MSYS2](https://www.msys2.org/) and, from a
 **UCRT64** shell:

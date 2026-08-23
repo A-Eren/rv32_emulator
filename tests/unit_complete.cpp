@@ -26,6 +26,10 @@ bool contains(const std::vector<std::string>& items, const std::string& needle) 
     return std::find(items.begin(), items.end(), needle) != items.end();
 }
 
+// Returns a pointer into `items`, so handing it a temporary leaves the caller
+// holding a dangling one -- deleted rather than left to ASan to find later.
+const Completion* find(const std::vector<Completion>&&, const std::string&) = delete;
+
 const Completion* find(const std::vector<Completion>& items, const std::string& text) {
     for (const Completion& item : items) {
         if (item.text == text) return &item;
@@ -176,7 +180,8 @@ RV_TEST(complete, both_register_spellings_are_offered) {
     RV_CHECK(contains(got, "x1"));
     RV_CHECK(contains(got, "x10"));
 
-    const Completion* item = find(complete("    add a0", 10), "a0");
+    const std::vector<Completion> offered = complete("    add a0", 10);
+    const Completion* item = find(offered, "a0");
     RV_CHECK(item != nullptr);
     // The list shows the correspondence, since that is the thing worth
     // learning about a register name.

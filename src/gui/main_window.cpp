@@ -901,7 +901,7 @@ namespace {
 class ExportMemDialog final : public QDialog {
 public:
     ExportMemDialog(QWidget* parent, u32 imem_bytes, u32 dmem_bytes)
-        : QDialog(parent), imem_bytes_(imem_bytes), dmem_bytes_(dmem_bytes) {
+        : QDialog(parent) {
         setWindowTitle("Export .mem");
         auto* form = new QFormLayout(this);
 
@@ -956,8 +956,6 @@ private:
         return QDir(folder_->text()).filePath(base_->text() + "_" + which + ".mem");
     }
 
-    u32 imem_bytes_;
-    u32 dmem_bytes_;
     QLineEdit* folder_ = nullptr;
     QLineEdit* base_ = nullptr;
     QCheckBox* imem_ = nullptr;
