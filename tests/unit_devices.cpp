@@ -413,6 +413,53 @@ RV_TEST(devices, an_overlapping_file_warns_and_still_builds_the_machine) {
     RV_CHECK_STR(std::string(m.hart().bus().device_at_slot(2)->type_name()), "leds");
 }
 
+// Where a board file is imagined to live, and a load= anchored at the root.
+// Spelled per platform because "anchored" is: on Windows a leading separator
+// and a drive letter both do it, on POSIX only the separator.
+#ifdef _WIN32
+constexpr const char* kBoardDir = "C:\\boards";
+constexpr const char* kRootedLoad = "\\images\\dmem.mem";
+#else
+constexpr const char* kBoardDir = "/boards";
+constexpr const char* kRootedLoad = "/images/dmem.mem";
+#endif
+
+RV_TEST(devices, an_anchored_load_path_is_not_resolved_against_the_board_file) {
+    // A load= that fails to open reports the path it tried, so this can ask
+    // where the lookup went without putting a .mem file on disk.
+    const auto looked_in = [](const char* load) {
+        Machine m;
+        const DeviceConfig config = parse_device_config(std::string("[[device]]\n"
+                                                                    "type = \"ram\"\n"
+                                                                    "slot = 0\n"
+                                                                    "size = 64\n"
+                                                                    "load = \"") +
+                                                            load + "\"\n",
+                                                        "board.toml");
+        RV_CHECK(config.ok());
+        return apply_device_config(m.hart().bus(), config, kBoardDir);
+    };
+
+    // Relative: resolved against the directory the board file came from.
+    const std::string relative = looked_in("dmem.mem");
+    RV_CHECK_NE(relative.find("dmem.mem"), std::string::npos);
+    RV_CHECK_NE(relative.find(kBoardDir), std::string::npos);
+
+    // Anchored at the root: taken as it stands. Gluing it to the board
+    // directory would look somewhere that is not what the file asked for.
+    const std::string rooted = looked_in(kRootedLoad);
+    RV_CHECK_NE(rooted.find(kRootedLoad), std::string::npos);
+    RV_CHECK_EQ(rooted.find(kBoardDir), std::string::npos);
+
+#ifdef _WIN32
+    // A drive letter anchors a path too, and does it without a leading
+    // separator -- the case a '/' test cannot see.
+    const std::string drive = looked_in("C:\\lab\\dmem.mem");
+    RV_CHECK_NE(drive.find("C:\\lab\\dmem.mem"), std::string::npos);
+    RV_CHECK_EQ(drive.find(kBoardDir), std::string::npos);
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // Blocks as inputs, custom peripherals, and memory sizes
 // ---------------------------------------------------------------------------

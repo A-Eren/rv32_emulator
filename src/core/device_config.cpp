@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -82,8 +83,14 @@ bool parse_number(std::string_view text, u32& out) {
 }
 
 std::string join_path(const std::string& directory, const std::string& file) {
-    if (directory.empty() || file.empty() || file[0] == '/') return file;
-    return directory.back() == '/' ? directory + file : directory + "/" + file;
+    if (directory.empty() || file.empty()) return file;
+    // Anchored paths are left alone. Testing for a leading '/' would be the
+    // POSIX half of that question only: on Windows a path is also anchored by
+    // a drive ("C:\lab\dmem.mem") or by a bare root ("\dmem.mem"), and
+    // gluing either onto the board file's directory produces nonsense.
+    const std::filesystem::path relative(file);
+    if (relative.has_root_name() || relative.has_root_directory()) return file;
+    return (std::filesystem::path(directory) / relative).string();
 }
 
 }  // namespace
