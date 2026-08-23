@@ -1,6 +1,6 @@
 # rv32
 
-[![build and test](https://github.com/A-Eren/rv32/actions/workflows/ci.yml/badge.svg)](https://github.com/A-Eren/rv32/actions/workflows/ci.yml)
+[![build and test](https://github.com/A-Eren/rv32_emulator/actions/workflows/ci.yml/badge.svg)](https://github.com/A-Eren/rv32_emulator/actions/workflows/ci.yml)
 
 An RV32IM_Zicsr emulator, assembler and debugger built for **learning and
 teaching assembly**, with machine-mode interrupts. Not a fast emulator — a visible one. Every design decision
@@ -63,7 +63,7 @@ Presets: `debug` (warnings as errors), `asan` (+ASan/UBSan), `release`.
 ### Windows
 
 Every push builds a Windows bundle. Open the latest green run under
-[Actions](https://github.com/A-Eren/rv32/actions/workflows/ci.yml), pick the
+[Actions](https://github.com/A-Eren/rv32_emulator/actions/workflows/ci.yml), pick the
 `windows / mingw-ucrt64` job, and download the **rv32-windows-x64** artifact:
 unzip it anywhere and double-click `rv32-gui.exe`. Nothing to install — the Qt
 DLLs travel with it. `rv32.exe`, the command-line half, is linked statically
