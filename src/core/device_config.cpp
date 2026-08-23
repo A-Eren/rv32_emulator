@@ -348,7 +348,14 @@ DeviceConfig parse_device_config(const std::string& text, const std::string& sou
 }
 
 std::string directory_of(const std::string& path) {
+#ifdef _WIN32
+    // Windows accepts both separators and mixes them freely: a board file
+    // chosen from the GUI's dialog arrives with backslashes, one typed on the
+    // command line usually with forward slashes.
+    const std::size_t slash = path.find_last_of("/\\");
+#else
     const std::size_t slash = path.find_last_of('/');
+#endif
     return slash == std::string::npos ? std::string() : path.substr(0, slash);
 }
 

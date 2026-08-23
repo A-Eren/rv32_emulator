@@ -62,3 +62,128 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: ./build/${{ matrix.preset }}/rv32-gui examples/fib.s --screenshot /tmp/rv32.png --steps 6
+
+  # -------------------------------------------------------------------------
+  # The Windows build, and the download that comes out of it.
+  #
+  # MSYS2's UCRT64 environment rather than MSVC: the warning set in
+  # cmake/CompilerWarnings.cmake is GCC's, so this is the same compiler the
+  # Linux job runs and a warning cannot appear on one platform only because the
+  # toolchain changed underneath it. UCRT (not msvcrt) is what makes `%zu` and
+  # the rest of the C99 formats behave.
+  # -------------------------------------------------------------------------
+  windows:
+    runs-on: windows-latest
+    name: windows / mingw-ucrt64
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base
+            mingw-w64-ucrt-x86_64-qt6-tools
+
+      - name: Configure
+        run: cmake --preset release
+
+      - name: Build
+        run: cmake --build build/release
+
+      # No release test preset, so name the directory instead. Same 23 tests
+      # the Linux job runs, the GUI one included.
+      - name: Test
+        run: ctest --test-dir build/release --output-on-failure
+
+      - name: Run the example programs
+        run: |
+          set -e
+          for f in examples/*.s; do
+            echo "--- $f"
+            ./build/release/rv32.exe run "$f" --quiet
+          done
+
+      - name: Check the .mem export
+        run: |
+          set -e
+          ./build/release/rv32.exe asm examples/fib.s -o imem.mem --dmem dmem.mem
+          head -4 imem.mem
+          grep -qvE '^[0-9a-f]{8}$' imem.mem && exit 1 || true
+
+      # Everything a person needs in one directory: the two binaries, the Qt
+      # DLLs and plugins they load at startup, and something to open.
+      - name: Bundle
+        run: |
+          set -e
+          mkdir -p dist
+          cp build/release/rv32.exe build/release/rv32-gui.exe dist/
+          strip dist/rv32.exe dist/rv32-gui.exe
+          cp -r examples docs dist/
+          cp README.md LICENSE dist/
+
+          windeployqt=$(command -v windeployqt-qt6 || command -v windeployqt6 || command -v windeployqt)
+          echo "using $windeployqt"
+          "$windeployqt" --release --no-translations --compiler-runtime \
+            "$(cygpath -w dist/rv32-gui.exe)"
+
+          # windeployqt knows about Qt. Anything else still resolving into the
+          # MSYS2 tree would be a DLL missing on a machine that has no MSYS2,
+          # so copy those in too.
+          for exe in dist/rv32.exe dist/rv32-gui.exe; do
+            ldd "$exe" | awk '{print $3}' | grep -i '^/ucrt64/bin/' \
+              | xargs -r -I{} cp -n {} dist/ || true
+          done
+
+          cat > dist/HOW-TO-RUN.txt <<'TXT'
+          rv32 -- an RV32IM_Zicsr emulator, assembler and debugger.
+
+          Double-click rv32-gui.exe for the desktop window: write assembly,
+          press F5 to assemble, F8 to step. Open examples\fib.s to start.
+
+          rv32.exe is the command-line half. From a terminal in this folder:
+
+              rv32.exe run examples\fib.s
+              rv32.exe dbg examples\fib.s
+              rv32.exe asm examples\fib.s
+
+          Keep the DLLs and the platforms\ folder next to rv32-gui.exe --
+          it will not start without them. rv32.exe is self-contained and can
+          be copied anywhere on its own.
+          TXT
+
+          du -sh dist
+
+      # Run the bundle the way a person would: with nothing but Windows on
+      # PATH. A DLL that was only ever found because MSYS2 was installed fails
+      # here rather than on someone's machine.
+      - name: Check the bundle runs on a clean PATH
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          $env:QT_QPA_PLATFORM = "offscreen"
+
+          $cli = Start-Process dist\rv32.exe -ArgumentList '--version' `
+            -NoNewWindow -Wait -PassThru
+          if ($cli.ExitCode -ne 0) { throw "rv32.exe exited $($cli.ExitCode)" }
+
+          $gui = Start-Process dist\rv32-gui.exe `
+            -ArgumentList 'examples\fib.s','--screenshot','frame.png','--steps','6' `
+            -Wait -PassThru
+          if ($gui.ExitCode -ne 0) { throw "rv32-gui.exe exited $($gui.ExitCode)" }
+          if (-not (Test-Path frame.png)) { throw "no frame was rendered" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rv32-windows-x64
+          path: dist/
+          if-no-files-found: error

@@ -3,8 +3,6 @@
 // The command handling here is deliberately thin. From M4 the real command set
 // lives in rv_cmd, shared by the CLI and the TUI, and this file shrinks to
 // argument parsing and dispatch.
-#include <unistd.h>
-
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -16,6 +14,7 @@
 
 #include "asm/assembler.hpp"
 #include "cmd/repl.hpp"
+#include "cmd/tty.hpp"
 #include "asm/diag_render.hpp"
 #include "core/hart.hpp"
 #include "core/device_config.hpp"
@@ -213,7 +212,7 @@ bool assemble_file(const std::string& path, const Options& options, as::Assemble
         as::RenderOptions render_options;
         // Colour only when stdout is a terminal, so redirecting to a file gives
         // clean text.
-        render_options.color = isatty(fileno(stderr)) != 0;
+        render_options.color = cmd::supports_color(stderr);
         std::fputs(as::render_all(out.diagnostics, source, render_options).c_str(), stderr);
     }
     return out.ok();
@@ -363,16 +362,16 @@ int command_dbg(const std::vector<std::string>& args) {
 
     if (!session.load_source(contents.str(), options.positional[0], assemble_options)) {
         as::RenderOptions render_options;
-        render_options.color = isatty(fileno(stderr)) != 0;
+        render_options.color = cmd::supports_color(stderr);
         std::fputs(as::render_all(session.program().diagnostics, session.source(), render_options)
                        .c_str(),
                    stderr);
         return 1;
     }
 
-    const bool interactive = isatty(fileno(stdin)) != 0;
+    const bool interactive = cmd::is_terminal(stdin);
     cmd::ReplOptions repl_options;
-    repl_options.color = isatty(fileno(stdout)) != 0;
+    repl_options.color = cmd::supports_color(stdout);
     // A piped script's output is unreadable without knowing which command
     // produced it, so echo when we are not talking to a person.
     repl_options.echo = !interactive;

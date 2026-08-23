@@ -60,6 +60,35 @@ ctest --preset debug
 
 Presets: `debug` (warnings as errors), `asan` (+ASan/UBSan), `release`.
 
+### Windows
+
+Every push builds a Windows bundle. Open the latest green run under
+[Actions](https://github.com/A-Eren/rv32/actions/workflows/ci.yml), pick the
+`windows / mingw-ucrt64` job, and download the **rv32-windows-x64** artifact:
+unzip it anywhere and double-click `rv32-gui.exe`. Nothing to install — the Qt
+DLLs travel with it. `rv32.exe`, the command-line half, is linked statically
+and is a single file you can copy on its own.
+
+To build it yourself, install [MSYS2](https://www.msys2.org/) and, from a
+**UCRT64** shell:
+
+```bash
+pacman -S --needed mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,qt6-base,qt6-tools}
+cmake --preset release
+cmake --build build/release
+ctest --test-dir build/release --output-on-failure
+```
+
+UCRT64 rather than MSVC on purpose: `cmake/CompilerWarnings.cmake` is a GCC
+warning set, so Windows compiles the same code with the same compiler as Linux
+and a warning cannot hide on one platform. UCRT rather than msvcrt because the
+C99 `printf` formats have to work.
+
+`src/cmd/tty.cpp` is the only file that asks the operating system anything —
+whether a stream is a terminal, and whether it will render colour. On Windows
+that second question involves asking the console to turn ANSI escapes on, which
+conhost does not do by itself.
+
 ## Trying it
 
 ```bash

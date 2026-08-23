@@ -86,6 +86,7 @@ add_library(rv_cmd STATIC
     src/cmd/format.cpp
     src/cmd/commands.cpp
     src/cmd/repl.cpp
+    src/cmd/tty.cpp
 )
 target_link_libraries(rv_cmd PUBLIC rv_dbg)
 rv_set_warnings(rv_cmd)
@@ -129,6 +130,14 @@ if(Qt6_FOUND)
     rv_set_warnings(rv_gui_tests)
     target_compile_options(rv_gui_tests PRIVATE -Wno-old-style-cast)
 
+    if(WIN32)
+        # Without this a console window opens behind the app every time it is
+        # started from Explorer. windeployqt supplies the Qt DLLs beside the
+        # exe; the compiler's own runtime is linked in so it need not.
+        set_target_properties(rv32-gui PROPERTIES WIN32_EXECUTABLE ON)
+        target_link_options(rv32-gui PRIVATE -static-libgcc -static-libstdc++)
+    endif()
+
     message(STATUS "Qt6 found: building rv32-gui")
 else()
     message(STATUS "Qt6 not found: skipping rv32-gui (the CLI and TUI are unaffected)")
@@ -140,6 +149,12 @@ endif()
 add_executable(rv32 src/main.cpp)
 target_link_libraries(rv32 PRIVATE rv_cmd)
 rv_set_warnings(rv32)
+
+if(WIN32)
+    # The CLI depends on nothing but the C++ runtime, so it may as well be a
+    # single file you can copy onto a lab machine and run.
+    target_link_options(rv32 PRIVATE -static)
+endif()
 
 # ---------------------------------------------------------------------------
 # Tests. No external framework: tests/rv_test.hpp is the whole harness.
