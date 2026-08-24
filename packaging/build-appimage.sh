@@ -25,17 +25,16 @@ fetch linuxdeploy-plugin-qt \
     https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
 
 echo "--- building"
-cmake -S "$ROOT" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release
-
-# Qt is found with QUIET, so a Qt that cannot be configured leaves no rv32-gui
-# target and the next line would fail as "unknown target" -- which says nothing
-# about why. Ask plainly instead.
-if ! cmake --build "$BUILD" --target help 2>/dev/null | grep -q '\brv32-gui\b'; then
+# CMakeLists already says which way it went, and find_package(Qt6) is QUIET, so
+# that message is the only signal there is. Without checking it the failure
+# arrives later as "unknown target 'rv32-gui'", which names the symptom only.
+cmake -S "$ROOT" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release 2>&1 \
+    | tee "$BUILD.configure.log"
+if grep -q "Qt6 not found" "$BUILD.configure.log"; then
     echo
     echo "error: Qt6 was not usable, so there is no rv32-gui to package." >&2
-    echo "       cmake said:" >&2
-    cmake -S "$ROOT" -B "$BUILD" -LA 2>/dev/null | grep -i '^Qt6' >&2 || true
-    cmake --version | head -1 >&2
+    echo "       the configure log above says what was missing; on a Debian" >&2
+    echo "       or Ubuntu that is usually qt6-base-dev and libgl1-mesa-dev." >&2
     exit 1
 fi
 cmake --build "$BUILD" --target rv32-gui rv32
