@@ -60,6 +60,30 @@ ctest --preset debug
 
 Presets: `debug` (warnings as errors), `asan` (+ASan/UBSan), `release`.
 
+### Linux
+
+Download **rv32-x86_64.AppImage** from
+[Releases](https://github.com/A-Eren/rv32_emulator/releases/latest), then run
+the installer once:
+
+```bash
+./packaging/install.sh ~/Downloads/rv32-x86_64.AppImage
+```
+
+rv32 is then in the applications menu with its own icon, `.s` files open with
+a double-click, and `rv32` and `rv32-gui` work from a terminal. Everything
+lands under `~/.local`, nothing needs root, and `install.sh --uninstall` takes
+it all back out.
+
+The installer unpacks the AppImage rather than leaving it as one file, because
+mounting an AppImage needs `libfuse2` and several current distributions no
+longer install it -- a double-click that silently does nothing is a poor way
+to discover that. If your machine does have it, the AppImage runs on its own
+after `chmod +x`.
+
+To build it yourself: `./packaging/build-appimage.sh`. It fetches its own
+tools into `build/` and needs no root.
+
 ### Windows
 
 Nothing to build and nothing to install. Go to

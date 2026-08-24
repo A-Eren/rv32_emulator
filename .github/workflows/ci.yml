@@ -208,6 +208,61 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+
+  # -------------------------------------------------------------------------
+  # The Linux download.
+  #
+  # ubuntu-22.04 on purpose: an AppImage carries its libraries but not glibc,
+  # so it runs on distributions no older than the one that built it. Building
+  # on the newest runner would quietly narrow that to almost nothing.
+  # -------------------------------------------------------------------------
+  appimage:
+    runs-on: ubuntu-22.04
+    name: linux / appimage
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build qt6-base-dev libfuse2 \
+                                  libxcb-cursor0 libxkbcommon-x11-0
+
+      - name: Build the AppImage
+        run: ./packaging/build-appimage.sh
+
+      # The same question the Windows bundle is asked: does it start somewhere
+      # that has none of what built it? The platform plugin needed here is the
+      # one linuxdeploy leaves out unless asked, so this is where that
+      # omission surfaces -- loudly, unlike on Windows.
+      - name: Check it runs headlessly
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set -e
+          ./build/rv32-x86_64.AppImage --version
+          ./build/rv32-x86_64.AppImage examples/fib.s --screenshot frame.png --steps 6
+          test -s frame.png
+          file frame.png | grep -q PNG
+
+      - name: Check the installer puts it in the menu
+        run: |
+          set -e
+          ./packaging/install.sh ./build/rv32-x86_64.AppImage
+          desktop-file-validate "$HOME/.local/share/applications/rv32.desktop"
+          test -f "$HOME/.local/share/icons/hicolor/256x256/apps/rv32.png"
+          grep -q "^Exec=$HOME/.local/lib/rv32/AppRun" \
+               "$HOME/.local/share/applications/rv32.desktop"
+          ./packaging/install.sh --uninstall
+          test ! -e "$HOME/.local/lib/rv32"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rv32-linux-x86_64
+          path: build/rv32-x86_64.AppImage
+          if-no-files-found: error
+
   # -------------------------------------------------------------------------
   # The download.
   #
@@ -221,7 +276,7 @@ jobs:
   # from a build that does not start.
   # -------------------------------------------------------------------------
   release:
-    needs: [test, windows]
+    needs: [test, windows, appimage]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -233,18 +288,37 @@ jobs:
           name: rv32-windows-x64
           path: rv32-windows-x64
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: rv32-linux-x86_64
+          path: .
+
       - name: Zip it
         run: |
           set -e
           chmod +x rv32-windows-x64/*.exe
           zip -qr rv32-windows-x64.zip rv32-windows-x64
           unzip -l rv32-windows-x64.zip | tail -3
+          chmod +x rv32-x86_64.AppImage
+          ls -lh rv32-x86_64.AppImage
 
       - uses: softprops/action-gh-release@v2
         with:
-          files: rv32-windows-x64.zip
+          files: |
+            rv32-windows-x64.zip
+            rv32-x86_64.AppImage
           generate_release_notes: true
           body: |
+            ## Linux
+
+            Download **rv32-x86_64.AppImage** and run `install.sh` from the
+            repository once -- rv32 then appears in the applications menu and
+            `.s` files open with a double-click. The installer unpacks it under
+            `~/.local`, needs no root, and undoes itself with `--uninstall`.
+
+            The AppImage also runs on its own with `chmod +x` and a
+            double-click, on any machine that still has `libfuse2`.
+
             ## Windows
 
             Download **rv32-windows-x64.zip**, unzip it anywhere, and

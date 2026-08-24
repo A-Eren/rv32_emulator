@@ -4,6 +4,7 @@
 // assembles, rv_cmd holds the command set. This is a shell around them.
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QIcon>
 #include <QPalette>
 #include <QTextCursor>
 #include <QStyleFactory>
@@ -50,6 +51,16 @@ void apply_dark_theme() {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName("rv32");
+    // The sizes are compiled in, so this works before anything is installed.
+    // setDesktopFileName is what lets a desktop match the window back to the
+    // .desktop entry -- without it the shell shows a generic icon in the dock
+    // however well the theme is populated.
+    QIcon icon;
+    for (const int size : {16, 24, 32, 48, 64, 128, 256}) {
+        icon.addFile(QString(":/rv32-%1.png").arg(size));
+    }
+    QApplication::setWindowIcon(icon);
+    QGuiApplication::setDesktopFileName("rv32");
     apply_dark_theme();
     QApplication::setApplicationVersion("0.1.0");
 

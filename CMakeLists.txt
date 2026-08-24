@@ -102,7 +102,9 @@ find_package(Qt6 QUIET COMPONENTS Widgets)
 
 if(Qt6_FOUND)
     set(CMAKE_AUTOMOC ON)
+    set(CMAKE_AUTORCC ON)
     add_executable(rv32-gui
+        packaging/rv32.qrc
         src/gui/gui_main.cpp
         src/gui/main_window.cpp
         src/gui/device_panel.cpp
