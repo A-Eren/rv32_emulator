@@ -321,7 +321,7 @@ CmdResult cmd_info(CmdContext& context, const std::vector<std::string>& args) {
                       "imem  0x00000000..0x%08x  %zu instructions loaded\n"
                       "dmem  0x00000000..0x%08x  %zu bytes of initial data\n"
                       "mmio  0xffff0000..0xffff00ff  uart, leds, switches, cycle counter\n",
-                      session.hart().imem().size() - 1, session.program().imem_words.size(),
+                      session.hart().imem().size() - 1, session.program().map.entries().size(),
                       session.hart().bus().dmem().size() - 1, session.program().dmem_bytes.size());
         context.print(summary);
         return CmdResult::success();
@@ -434,7 +434,7 @@ CmdResult cmd_disassemble(CmdContext& context, const std::vector<std::string>& a
         addr = *resolved;
     }
     if (args.size() > 2) count = static_cast<u32>(std::strtoul(args[2].c_str(), nullptr, 0));
-    context.print(format_disassembly(context.session, addr & ~3u, count, context.format));
+    context.print(format_disassembly(context.session, addr & ~1u, count, context.format));
     return CmdResult::success();
 }
 

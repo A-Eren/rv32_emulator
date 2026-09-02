@@ -28,6 +28,10 @@ void CsrFile::set_pending_interrupts(u32 mip) {
 }
 
 void CsrFile::set_counters(u64 cycle, u64 instret) {
+    values_[static_cast<std::size_t>(CsrId::MCYCLE)] = static_cast<u32>(cycle);
+    values_[static_cast<std::size_t>(CsrId::MCYCLEH)] = static_cast<u32>(cycle >> 32);
+    values_[static_cast<std::size_t>(CsrId::MINSTRET)] = static_cast<u32>(instret);
+    values_[static_cast<std::size_t>(CsrId::MINSTRETH)] = static_cast<u32>(instret >> 32);
     values_[static_cast<std::size_t>(CsrId::CYCLE)] = static_cast<u32>(cycle);
     values_[static_cast<std::size_t>(CsrId::CYCLEH)] = static_cast<u32>(cycle >> 32);
     // No independent wall clock: `time` mirrors `cycle`, which is the honest
@@ -36,6 +40,16 @@ void CsrFile::set_counters(u64 cycle, u64 instret) {
     values_[static_cast<std::size_t>(CsrId::TIMEH)] = static_cast<u32>(cycle >> 32);
     values_[static_cast<std::size_t>(CsrId::INSTRET)] = static_cast<u32>(instret);
     values_[static_cast<std::size_t>(CsrId::INSTRETH)] = static_cast<u32>(instret >> 32);
+}
+
+u64 CsrFile::machine_cycle() const {
+    return (static_cast<u64>(values_[static_cast<std::size_t>(CsrId::MCYCLEH)]) << 32) |
+           values_[static_cast<std::size_t>(CsrId::MCYCLE)];
+}
+
+u64 CsrFile::machine_instret() const {
+    return (static_cast<u64>(values_[static_cast<std::size_t>(CsrId::MINSTRETH)]) << 32) |
+           values_[static_cast<std::size_t>(CsrId::MINSTRET)];
 }
 
 }  // namespace rv::core

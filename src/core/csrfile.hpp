@@ -36,9 +36,17 @@ public:
     /// though they are architecturally constrained, and by reverse-step undo.
     void raw_write(CsrAddr addr, u32 value);
 
-    /// Refresh the read-only counter CSRs from the hart's counters, so that a
-    /// csrr of `cycle` observes the cycle it is executing in.
+    /// Refresh the counter CSRs from the hart's counters, so that a csrr of
+    /// `cycle` observes the cycle it is executing in.
     void set_counters(u64 cycle, u64 instret);
+
+    /// Recompose the writable machine counters from their two halves. The hart
+    /// reads these back after an instruction writes one, so that `csrw mcycle`
+    /// actually moves the counter instead of being clobbered by the next
+    /// set_counters(). The user-mode shadows at 0xc00 have no such pair: they
+    /// are read-only, and writing one raises IllegalInstruction.
+    u64 machine_cycle() const;
+    u64 machine_instret() const;
 
     /// Publish the interrupt lines the devices are asserting. mip is read-only
     /// to software and computed from device state, so it is pushed in here

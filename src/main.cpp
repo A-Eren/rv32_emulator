@@ -1,4 +1,4 @@
-// rv32 -- a RISC-V RV32IM_Zicsr emulator, assembler and debugger.
+// rv32 -- a RISC-V RV32IMC_Zicsr_Zifencei emulator, assembler and debugger.
 //
 // The command handling here is deliberately thin. From M4 the real command set
 // lives in rv_cmd, shared by the CLI and the TUI, and this file shrinks to
@@ -26,7 +26,7 @@ namespace {
 
 using namespace rv;
 
-constexpr const char* kVersion = "rv32 0.1.0 (RV32IM_Zicsr)";
+constexpr const char* kVersion = "rv32 0.1.0 (RV32IMC_Zicsr_Zifencei)";
 
 void print_usage() {
     std::puts(
@@ -143,7 +143,16 @@ void print_trace_line(const core::StepOutcome& outcome, const core::Hart& hart, 
     disasm_options.abi_names = !numeric;
     const std::string text = isa::disassemble(outcome.instr, outcome.pc_before, disasm_options);
 
-    std::printf("%08x  %08x  %-26s", outcome.pc_before, outcome.raw, text.c_str());
+    // A compressed instruction is 16 bits, and padding it to eight digits would
+    // suggest the fetch read four bytes when it read two. Right-aligned in the
+    // same column so the listing still lines up.
+    char bits[16];
+    if (outcome.instr.length == 2) {
+        std::snprintf(bits, sizeof bits, "    %04x", outcome.raw & 0xffffu);
+    } else {
+        std::snprintf(bits, sizeof bits, "%08x", outcome.raw);
+    }
+    std::printf("%08x  %s  %-26s", outcome.pc_before, bits, text.c_str());
     if (outcome.reg_written != core::kNoReg) {
         const RegIdx reg = outcome.reg_written;
         std::printf("%s = 0x%08x",
@@ -268,8 +277,9 @@ int command_asm(const std::vector<std::string>& args) {
     }
 
     if (!options.quiet) {
+        // Instructions, not words: with the C extension a word can hold two.
         std::printf("%s: %zu instructions (%zu bytes)\n", imem_path.c_str(),
-                    program.imem_words.size(), program.imem_words.size() * 4);
+                    program.map.entries().size(), program.imem_bytes);
         std::printf("%s: %zu bytes of data\n", dmem_path.c_str(), program.dmem_bytes.size());
     }
     return 0;
@@ -378,7 +388,7 @@ int command_dbg(const std::vector<std::string>& args) {
     repl_options.format.numeric_registers = options.numeric;
 
     std::printf("%s\n%zu instructions, entry 0x%08x. Type 'help' for commands.\n\n", kVersion,
-                session.program().imem_words.size(), session.program().entry);
+                session.program().map.entries().size(), session.program().entry);
     std::fputs(cmd::format_location(session, repl_options.format).c_str(), stdout);
 
     cmd::Repl repl(session, repl_options);
@@ -391,16 +401,32 @@ int command_exec(const std::vector<std::string>& args) {
     options.trace = true;
     if (!parse_options(args, options)) return 2;
 
-    std::vector<Word> words;
+    // Arguments are laid out as a byte stream so that compressed and full-width
+    // instructions can be mixed. The digit count decides the width: four hex
+    // digits is a halfword, eight is a word. `rv32 exec 4505 00150513` is a
+    // c.li followed by an addi.
+    std::vector<u8> bytes;
     for (const std::string& text : options.positional) {
+        const std::string digits =
+            text.compare(0, 2, "0x") == 0 || text.compare(0, 2, "0X") == 0 ? text.substr(2) : text;
         char* end = nullptr;
-        const unsigned long long value = std::strtoull(text.c_str(), &end, 16);
-        if (end == text.c_str() || *end != '\0') {
+        const unsigned long long value = std::strtoull(digits.c_str(), &end, 16);
+        if (digits.empty() || end == digits.c_str() || *end != '\0' || value > 0xffff'ffffull) {
             std::fprintf(stderr, "rv32: '%s' is not a hex instruction word\n", text.c_str());
             return 2;
         }
-        words.push_back(static_cast<Word>(value));
+        const bool half = digits.size() <= 4;
+        if (half && (value & 3u) == 3u) {
+            std::fprintf(stderr,
+                         "rv32: '%s' is four digits, so it is read as a 16-bit instruction, "
+                         "but its low two bits say it is 32-bit; write all eight digits\n",
+                         text.c_str());
+            return 2;
+        }
+        const int width = half ? 2 : 4;
+        for (int i = 0; i < width; ++i) bytes.push_back(static_cast<u8>(value >> (8 * i)));
     }
+    const std::vector<Word> words = core::pack_bytes_to_words(bytes);
     if (words.empty()) {
         std::fprintf(stderr, "rv32: no instruction words given\n");
         return 2;
@@ -480,10 +506,32 @@ int command_dis(const std::vector<std::string>& args) {
 
     isa::DisasmOptions disasm_options;
     disasm_options.abi_names = !options.numeric;
-    for (std::size_t i = 0; i < words.size(); ++i) {
-        const Addr address = static_cast<Addr>(i * 4);
-        std::printf("%08x:  %08x  %s\n", address, words[i],
-                    isa::disassemble_word(words[i], address, disasm_options).c_str());
+
+    // The image is words, but the instructions in it are a halfword stream: a
+    // word can hold two compressed instructions, and a 32-bit one can straddle
+    // the boundary between two words. So walk halfwords and let each
+    // instruction say how far to advance.
+    const auto half_at = [&](std::size_t index) -> u32 {
+        const std::size_t word = index / 2;
+        if (word >= words.size()) return 0;
+        return (index % 2 == 0) ? (words[word] & 0xffffu) : (words[word] >> 16);
+    };
+
+    const std::size_t half_count = words.size() * 2;
+    for (std::size_t i = 0; i < half_count;) {
+        const Addr address = static_cast<Addr>(i * 2);
+        const u32 low = half_at(i);
+        const bool wide = isa::instruction_length(low) == 4 && i + 1 < half_count;
+        const Word word = wide ? (low | (half_at(i + 1) << 16)) : low;
+
+        if (wide) {
+            std::printf("%08x:  %08x  %s\n", address, word,
+                        isa::disassemble_word(word, address, disasm_options).c_str());
+        } else {
+            std::printf("%08x:      %04x  %s\n", address, word & 0xffffu,
+                        isa::disassemble_word(word, address, disasm_options).c_str());
+        }
+        i += wide ? 2 : 1;
     }
     return 0;
 }

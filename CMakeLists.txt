@@ -19,6 +19,7 @@ add_library(rv_isa STATIC
     src/isa/isa.cpp
     src/isa/csr.cpp
     src/isa/decode.cpp
+    src/isa/expand.cpp
     src/isa/encode.cpp
     src/isa/disasm.cpp
     src/isa/regnames.cpp
@@ -167,6 +168,7 @@ add_executable(rv_tests
     tests/test_main.cpp
     tests/unit_fields.cpp
     tests/unit_decode.cpp
+    tests/unit_expand.cpp
     tests/unit_roundtrip.cpp
     tests/unit_exec_alu.cpp
     tests/unit_exec_mem.cpp
@@ -188,7 +190,7 @@ target_include_directories(rv_tests PRIVATE tests)
 rv_set_warnings(rv_tests)
 
 # One CTest entry per suite, so a failure can be re-run in isolation.
-foreach(suite fields decode roundtrip exec_alu exec_mem exec_branch exec_m exec_coverage csr_trap interrupt memfile devices
+foreach(suite fields decode expand roundtrip exec_alu exec_mem exec_branch exec_m exec_coverage csr_trap interrupt memfile devices
               lexer diag_render assembler complete session)
     add_test(NAME unit.${suite} COMMAND rv_tests --filter=${suite})
 endforeach()

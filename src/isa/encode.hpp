@@ -30,6 +30,12 @@ enum class EncodeError : u8 {
     ShiftAmountOutOfRange,
     CsrOutOfRange,
     RegisterOutOfRange,
+    // Compressed-only. The C extension buys its 16 bits by restricting what
+    // each field can say, so these are the three ways an operand can be
+    // perfectly legal in the 32-bit form and impossible in the short one.
+    RegisterNotCompressible,  // a 3-bit field reaches x8-x15 only
+    RegisterMustNotBeZero,    // c.jr, c.mv, c.addi and friends exclude x0
+    ImmediateMustNotBeZero,   // c.addi4spn, c.addi16sp and c.lui exclude 0
 };
 
 /// On failure, `field` names the offending operand and [min, max] is its legal
@@ -37,6 +43,9 @@ enum class EncodeError : u8 {
 /// rules itself.
 struct EncodeResult {
     Word word = 0;
+    /// How many bytes of `word` to emit: 2 for a compressed instruction, whose
+    /// bits are all in the low half, and 4 otherwise.
+    u8 size_bytes = 4;
     EncodeError error = EncodeError::None;
     const char* field = "";
     i64 value = 0;

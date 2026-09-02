@@ -35,13 +35,40 @@ std::string render_mem_file(const std::vector<Word>& words, const MemFileOptions
     std::string out;
     out.reserve(count * (options.annotate ? 40 : 9));
 
-    char buffer[128];
+    // The file format is unchanged -- one 32-bit word per line, byte address
+    // n*4 -- because that is what a BRAM wants. But the instructions inside it
+    // are a halfword stream now, so a line can hold two of them, or the tail of
+    // one and the head of the next. The annotation walks that stream separately
+    // and prints each instruction against the line it starts on.
+    const auto half_at = [&](std::size_t index) -> u32 {
+        const std::size_t word = index / 2;
+        const Word value = word < words.size() ? words[word] : 0u;
+        return (index % 2 == 0) ? (value & 0xffffu) : (value >> 16);
+    };
+
+    std::vector<std::string> notes;
+    if (options.annotate) {
+        notes.resize(count);
+        const std::size_t half_count = count * 2;
+        for (std::size_t h = 0; h < half_count;) {
+            const u32 low = half_at(h);
+            const bool wide = isa::instruction_length(low) == 4 && h + 1 < half_count;
+            const Word instr = wide ? (low | (half_at(h + 1) << 16)) : low;
+            const Addr address = static_cast<Addr>(h * 2);
+
+            std::string& note = notes[h / 2];
+            if (!note.empty()) note += " | ";
+            note += isa::disassemble_word(instr, address);
+            h += wide ? 2 : 1;
+        }
+    }
+
+    char buffer[256];
     for (std::size_t i = 0; i < count; ++i) {
         const Word word = i < words.size() ? words[i] : 0u;
         if (options.annotate) {
-            const std::string text =
-                isa::disassemble_word(word, static_cast<Addr>(i * 4));
-            std::snprintf(buffer, sizeof buffer, "%08x  // %04zx: %s\n", word, i * 4, text.c_str());
+            std::snprintf(buffer, sizeof buffer, "%08x  // %04zx: %s\n", word, i * 4,
+                          notes[i].c_str());
         } else {
             std::snprintf(buffer, sizeof buffer, "%08x\n", word);
         }

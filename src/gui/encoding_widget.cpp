@@ -6,6 +6,8 @@
 
 #include "isa/decode.hpp"
 #include "isa/disasm.hpp"
+#include "isa/encode.hpp"
+#include "isa/expand.hpp"
 #include "isa/regnames.hpp"
 
 namespace rv::gui {
@@ -57,6 +59,23 @@ QList<BitField> fields_of(const isa::DecodedInstr& instr) {
     const BitField rs1{"rs1", register_detail(instr.rs1), 19, 15, kRegisterColour};
     const BitField rs2{"rs2", register_detail(instr.rs2), 24, 20, kRegisterColour};
 
+    // Compressed layouts. The op field is two bits, not seven, and the register
+    // fields move and shrink -- naming which three bits hold a register is most
+    // of what makes a 16-bit encoding readable at all.
+    const BitField cop{"op",
+                       hex(bits(word, 1, 0)) + " " +
+                           QString::fromLatin1(desc.mnemonic.data(),
+                                               static_cast<int>(desc.mnemonic.size())),
+                       1, 0, kMnemonicColour};
+    const BitField cfunct3{"funct3", hex(bits(word, 15, 13)), 15, 13, kDimColour};
+    const BitField crd{"rd/rs1", register_detail(instr.rd), 11, 7, kRegisterColour};
+    const BitField crs1{"rs1", register_detail(instr.rs1), 11, 7, kRegisterColour};
+    const BitField crs2{"rs2", register_detail(instr.rs2), 6, 2, kRegisterColour};
+    const BitField crs1p{"rs1'", register_detail(instr.rs1), 9, 7, kRegisterColour};
+    const BitField crdp{"rd'", register_detail(instr.rd), 9, 7, kRegisterColour};
+    const BitField crs2p{"rs2'", register_detail(instr.rs2), 4, 2, kRegisterColour};
+    const BitField crdp_low{"rd'", register_detail(instr.rd), 4, 2, kRegisterColour};
+
     switch (desc.format) {
         case isa::InstrFormat::R:
             return {funct7, rs2, rs1, funct3, rd, opcode};
@@ -100,6 +119,78 @@ QList<BitField> fields_of(const isa::DecodedInstr& instr) {
         case isa::InstrFormat::J:
             return {{"imm[20|10:1|11|19:12]", QString::number(instr.imm), 31, 12, kNumberColour},
                     rd, opcode};
+
+        // ---- compressed ----------------------------------------------------
+        // The immediate labels are the spec's own scatter notation, which is
+        // the point: c.lwsp, c.swsp and c.lw all encode a word offset and all
+        // three put the bits somewhere different, and no amount of staring at
+        // "imm" would ever show that.
+        case isa::InstrFormat::CR:
+            if (desc.syntax == isa::OperandSyntax::C_RS1) {
+                return {{"funct4", hex(bits(word, 15, 12)), 15, 12, kDimColour}, crs1,
+                        {"0", {}, 6, 2, kDimColour}, cop};
+            }
+            return {{"funct4", hex(bits(word, 15, 12)), 15, 12, kDimColour}, crd, crs2, cop};
+
+        case isa::InstrFormat::CI:
+            if (desc.syntax == isa::OperandSyntax::C_RD_SHAMT) {
+                return {cfunct3, {"shamt[5]", {}, 12, 12, kNumberColour}, crd,
+                        {"shamt[4:0]", QString::number(instr.imm), 6, 2, kNumberColour}, cop};
+            }
+            if (desc.syntax == isa::OperandSyntax::C_RD_OFS_SP) {
+                return {cfunct3, {"off[5]", {}, 12, 12, kNumberColour}, crd,
+                        {"off[4:2|7:6]", QString::number(instr.imm), 6, 2, kNumberColour}, cop};
+            }
+            if (desc.syntax == isa::OperandSyntax::C_IMM) {
+                return {cfunct3, {"imm[9]", {}, 12, 12, kNumberColour}, crd,
+                        {"imm[4|6|8:7|5]", QString::number(instr.imm), 6, 2, kNumberColour}, cop};
+            }
+            if (desc.syntax == isa::OperandSyntax::C_RD_UIMM) {
+                return {cfunct3, {"imm[17]", {}, 12, 12, kNumberColour}, crd,
+                        {"imm[16:12]", hex(static_cast<u32>(instr.imm) >> 12), 6, 2,
+                         kNumberColour},
+                        cop};
+            }
+            return {cfunct3, {"imm[5]", {}, 12, 12, kNumberColour}, crd,
+                    {"imm[4:0]", QString::number(instr.imm), 6, 2, kNumberColour}, cop};
+
+        case isa::InstrFormat::CSS:
+            return {cfunct3, {"off[5:2|7:6]", QString::number(instr.imm), 12, 7, kNumberColour},
+                    crs2, cop};
+
+        case isa::InstrFormat::CIW:
+            return {cfunct3,
+                    {"imm[5:4|9:6|2|3]", QString::number(instr.imm), 12, 5, kNumberColour},
+                    crdp_low, cop};
+
+        case isa::InstrFormat::CL:
+            return {cfunct3, {"off[5:3]", {}, 12, 10, kNumberColour}, crs1p,
+                    {"off[2|6]", QString::number(instr.imm), 6, 5, kNumberColour}, crdp_low, cop};
+
+        case isa::InstrFormat::CS:
+            return {cfunct3, {"off[5:3]", {}, 12, 10, kNumberColour}, crs1p,
+                    {"off[2|6]", QString::number(instr.imm), 6, 5, kNumberColour}, crs2p, cop};
+
+        case isa::InstrFormat::CA:
+            return {{"funct6", hex(bits(word, 15, 10)), 15, 10, kDimColour}, crdp,
+                    {"funct2", hex(bits(word, 6, 5)), 6, 5, kDimColour}, crs2p, cop};
+
+        case isa::InstrFormat::CB:
+            // Shared by the branches and by c.srli/c.srai/c.andi, which reuse
+            // the offset bits as a shift amount or an immediate.
+            if (desc.syntax == isa::OperandSyntax::C_RS1P_LBL) {
+                return {cfunct3, {"off[8|4:3]", {}, 12, 10, kNumberColour}, crs1p,
+                        {"off[7:6|2:1|5]", QString::number(instr.imm), 6, 2, kNumberColour}, cop};
+            }
+            return {cfunct3, {"imm[5]", {}, 12, 12, kNumberColour},
+                    {"funct2", hex(bits(word, 11, 10)), 11, 10, kDimColour}, crdp,
+                    {"imm[4:0]", QString::number(instr.imm), 6, 2, kNumberColour}, cop};
+
+        case isa::InstrFormat::CJ:
+            return {cfunct3,
+                    {"off[11|4|9:8|10|6|7|3:1|5]", QString::number(instr.imm), 12, 2,
+                     kNumberColour},
+                    cop};
     }
     return {opcode};
 }
@@ -138,7 +229,7 @@ Addr EncodingWidget::shown_address() const {
 QSize EncodingWidget::sizeHint() const { return QSize(600, 160); }
 
 QStringList EncodingWidget::field_summary() const {
-    const isa::DecodedInstr instr = isa::decode(session_->read_imem_word(shown_address()));
+    const isa::DecodedInstr instr = isa::decode(session_->read_imem_instr(shown_address()));
     QStringList out;
     if (!instr.valid()) return out;
     for (const BitField& field : fields_of(instr)) {
@@ -152,7 +243,7 @@ void EncodingWidget::paintEvent(QPaintEvent* /*event*/) {
     painter.fillRect(rect(), QColor(0x1e, 0x21, 0x27));
 
     const Addr address = shown_address();
-    const Word word = session_->read_imem_word(address);
+    const Word word = session_->read_imem_instr(address);
     const isa::DecodedInstr instr = isa::decode(word);
 
     const QFontMetrics metrics(font());
@@ -162,7 +253,12 @@ void EncodingWidget::paintEvent(QPaintEvent* /*event*/) {
 
     // Heading: where, what bits, and what it disassembles to.
     {
-        const QString text = QString::asprintf("0x%08x   %08x   ", address, word) +
+        // Show the bits at the width they occupy: eight digits for a 32-bit
+        // instruction, four for a compressed one.
+        const QString bits = instr.length == 2
+                                 ? QString::asprintf("    %04x", word & 0xffffu)
+                                 : QString::asprintf("%08x", word);
+        const QString text = QString::asprintf("0x%08x   ", address) + bits + "   " +
                              QString::fromStdString(isa::disassemble_word(word, address));
         painter.setPen(kTextColour);
         painter.drawText(8, y + metrics.ascent(), text);
@@ -232,6 +328,21 @@ void EncodingWidget::paintEvent(QPaintEvent* /*event*/) {
         column += text_width + 3 * char_width;
     }
     y += line_height + 4;
+
+    // For a compressed instruction, the base instruction it stands for. This is
+    // the lesson: every C-extension encoding is a shorter spelling of something
+    // RV32I could already say, and seeing the two side by side is what makes
+    // "c.addi a0, 1" stop looking like a new instruction.
+    if (isa::is_compressed_format(instr.desc().format)) {
+        const isa::DecodedInstr base = isa::expand(instr);
+        const isa::EncodeResult encoded = isa::encode(base.id, isa::operands_of(base));
+        QString text = "expands to  " +
+                       QString::fromStdString(isa::disassemble(base, address));
+        if (encoded.ok()) text += QString::asprintf("   (%08x)", encoded.word);
+        painter.setPen(QColor(0x8a, 0xb4, 0xf8));
+        painter.drawText(8, y + metrics.ascent(), text);
+        y += line_height + 4;
+    }
 
     // What it did, or where it came from. This is the line that connects the
     // bits to the machine.

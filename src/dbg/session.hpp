@@ -125,6 +125,23 @@ public:
     const std::string& uart_output() const { return hart_.bus().uart_output(); }
 
     u32 read_imem_word(Addr addr) const { return hart_.imem().read_word_raw(addr); }
+
+    /// Fetch one instruction the way the hart does: a halfword first, then the
+    /// upper half only if the low two bits say the instruction is 32 bits wide.
+    /// Reading a plain word instead would return 0 for a compressed instruction
+    /// sitting in the last halfword of imem, and would pull in the *next*
+    /// instruction's bits for every other one.
+    u32 read_imem_instr(Addr addr) const {
+        const u32 low = hart_.imem().read_half_raw(addr);
+        if (isa::instruction_length(low) == 2) return low;
+        return low | (static_cast<u32>(hart_.imem().read_half_raw(addr + 2)) << 16);
+    }
+
+    /// How many bytes the instruction at `addr` occupies, for stepping a
+    /// disassembly listing forward.
+    u8 instr_length_at(Addr addr) const {
+        return isa::instruction_length(hart_.imem().read_half_raw(addr));
+    }
     u32 read_dmem_word(Addr addr) const { return hart_.bus().peek_word(addr); }
 
     /// Resolve a symbol name to its address, for `break main` and `x/16xw msg`.

@@ -22,6 +22,18 @@ constexpr const char* kUpperForm = "imm(0..0xfffff)";
 constexpr const char* kCsrForm = "csr(mstatus, mtvec, …)";
 constexpr const char* kZimmForm = "imm(0..31)";
 
+// Compressed forms. Every one of these ranges is narrower than its 32-bit
+// equivalent, which is the whole reason they are spelled out separately: the
+// point of the hint is to say what will actually assemble.
+constexpr const char* kCRegForm = "reg(s0, s1, a0-a5)";
+constexpr const char* kCImm6Form = "imm(-32..31)";
+constexpr const char* kCShamtForm = "imm(0..31)";
+constexpr const char* kCUpperForm = "imm(-32..31, not 0)";
+constexpr const char* kCSpImmForm = "imm(-512..496, x16)";
+constexpr const char* kC4SpnForm = "imm(4..1020, x4)";
+constexpr const char* kCMemForm = "mem(0..124(base), x4)";
+constexpr const char* kCSpMemForm = "mem(0..252(sp), x4)";
+
 /// The operand shapes of a real instruction, read straight off its row. One
 /// case per operand syntax rather than one per instruction, which is what keeps
 /// this from having to be maintained alongside the table.
@@ -49,6 +61,40 @@ std::vector<OperandHint> hints_for(isa::OperandSyntax syntax) {
             return {{"rd", kRegForm}, {"csr", kCsrForm}, {"rs1", kRegForm}};
         case isa::OperandSyntax::RD_CSR_ZIMM:
             return {{"rd", kRegForm}, {"csr", kCsrForm}, {"zimm", kZimmForm}};
+
+        // ---- compressed ----------------------------------------------------
+        case isa::OperandSyntax::C_RD_IMM:
+            return {{"rd", kRegForm}, {"imm", kCImm6Form}};
+        case isa::OperandSyntax::C_RD_UIMM:
+            return {{"rd", kRegForm}, {"imm", kCUpperForm}};
+        case isa::OperandSyntax::C_RD_SHAMT:
+            return {{"rd", kRegForm}, {"shamt", kCShamtForm}};
+        case isa::OperandSyntax::C_RD_RS2:
+            return {{"rd", kRegForm}, {"rs2", kRegForm}};
+        case isa::OperandSyntax::C_RDP_IMM:
+            return {{"rd'", kCRegForm}, {"imm", kCImm6Form}};
+        case isa::OperandSyntax::C_RDP_UIMM:
+            return {{"rd'", kCRegForm}, {"imm", kC4SpnForm}};
+        case isa::OperandSyntax::C_RDP_SHAMT:
+            return {{"rd'", kCRegForm}, {"shamt", kCShamtForm}};
+        case isa::OperandSyntax::C_RDP_RS2P:
+            return {{"rd'", kCRegForm}, {"rs2'", kCRegForm}};
+        case isa::OperandSyntax::C_RS1:
+            return {{"rs1", kRegForm}};
+        case isa::OperandSyntax::C_IMM:
+            return {{"imm", kCSpImmForm}};
+        case isa::OperandSyntax::C_LBL:
+            return {{"label", kLabelForm}};
+        case isa::OperandSyntax::C_RS1P_LBL:
+            return {{"rs1'", kCRegForm}, {"label", kLabelForm}};
+        case isa::OperandSyntax::C_RDP_OFS_RS1P:
+            return {{"rd'", kCRegForm}, {"offset(base')", kCMemForm}};
+        case isa::OperandSyntax::C_RS2P_OFS_RS1P:
+            return {{"rs2'", kCRegForm}, {"offset(base')", kCMemForm}};
+        case isa::OperandSyntax::C_RD_OFS_SP:
+            return {{"rd", kRegForm}, {"offset(sp)", kCSpMemForm}};
+        case isa::OperandSyntax::C_RS2_OFS_SP:
+            return {{"rs2", kRegForm}, {"offset(sp)", kCSpMemForm}};
     }
     return {};
 }
@@ -295,7 +341,9 @@ std::vector<Completion> complete(std::string_view line, u16 column,
         const std::string form = hint != nullptr ? hint->form : std::string();
 
         // Offer what actually belongs in this position rather than everything.
-        const bool wants_register = form == kRegForm;
+        // An exact compare, so every register-shaped form has to be listed --
+        // miss one and register completion silently switches off for it.
+        const bool wants_register = form == kRegForm || form == kCRegForm;
         const bool wants_csr = form == kCsrForm;
         const bool wants_label = starts_with(form, "label");
 

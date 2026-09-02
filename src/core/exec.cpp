@@ -11,7 +11,10 @@ ExecResult execute(CpuState& cpu, Bus& bus, const isa::DecodedInstr& instr,
     using isa::InstrId;
 
     ExecResult out;
-    out.next_pc = cpu.pc + 4;
+    // A compressed instruction advances the pc by 2, not 4. Seeding next_pc
+    // from the decoded length covers every instruction that does not branch,
+    // which is most of them, in one place.
+    out.next_pc = cpu.pc + instr.length;
 
     const u32 rs1 = cpu.reg(instr.rs1);
     const u32 rs2 = cpu.reg(instr.rs2);
@@ -91,7 +94,7 @@ ExecResult execute(CpuState& cpu, Bus& bus, const isa::DecodedInstr& instr,
         // ---- jumps ---------------------------------------------------------
         case InstrId::JAL: {
             const Addr target = cpu.pc + imm;
-            write_reg(cpu.pc + 4);
+            write_reg(cpu.pc + instr.length);
             out.next_pc = target;
             break;
         }
@@ -101,7 +104,7 @@ ExecResult execute(CpuState& cpu, Bus& bus, const isa::DecodedInstr& instr,
             // target must be computed before the link register is written so
             // that `jalr ra, ra, 0` jumps to the old ra.
             const Addr target = (rs1 + imm) & ~1u;
-            write_reg(cpu.pc + 4);
+            write_reg(cpu.pc + instr.length);
             out.next_pc = target;
             break;
         }
@@ -239,6 +242,10 @@ ExecResult execute(CpuState& cpu, Bus& bus, const isa::DecodedInstr& instr,
         case InstrId::FENCE:
             // Single hart, in-order, no store buffer: architecturally a no-op.
             break;
+        case InstrId::FENCEI:
+            // Harvard: IMEM is never written, so there is no stale instruction
+            // fetch to flush. A no-op that cannot become anything else.
+            break;
         case InstrId::ECALL:
             raise(TrapCause::EnvironmentCallFromMMode, 0);
             break;
@@ -285,14 +292,53 @@ ExecResult execute(CpuState& cpu, Bus& bus, const isa::DecodedInstr& instr,
             break;
         }
 
+        // ---- compressed ----------------------------------------------------
+        // Unreachable: the hart expands every compressed instruction before it
+        // gets here, so this function only ever sees base ids. The labels exist
+        // so that -Werror=switch still forces a decision when a row is added to
+        // the C block of instr_table.def -- the decision being "expand it in
+        // isa/expand.cpp", not "implement it again here".
+        case InstrId::C_ADDI4SPN:
+        case InstrId::C_LW:
+        case InstrId::C_SW:
+        case InstrId::C_NOP:
+        case InstrId::C_ADDI:
+        case InstrId::C_JAL:
+        case InstrId::C_LI:
+        case InstrId::C_ADDI16SP:
+        case InstrId::C_LUI:
+        case InstrId::C_SRLI:
+        case InstrId::C_SRAI:
+        case InstrId::C_ANDI:
+        case InstrId::C_SUB:
+        case InstrId::C_XOR:
+        case InstrId::C_OR:
+        case InstrId::C_AND:
+        case InstrId::C_J:
+        case InstrId::C_BEQZ:
+        case InstrId::C_BNEZ:
+        case InstrId::C_SLLI:
+        case InstrId::C_LWSP:
+        case InstrId::C_JR:
+        case InstrId::C_MV:
+        case InstrId::C_EBREAK:
+        case InstrId::C_JALR:
+        case InstrId::C_ADD:
+        case InstrId::C_SWSP:
         case InstrId::Count:
             raise(TrapCause::IllegalInstruction, instr.raw);
             break;
     }
 
-    // Any control transfer that lands off a 4-byte boundary faults. Checking it
+    // Any control transfer that lands off a 2-byte boundary faults. Checking it
     // once here covers jal, jalr, branches and mret in one place.
-    if (!out.trapped && out.halt == HaltReason::None && (out.next_pc & 3u) != 0) {
+    //
+    // With the C extension present IALIGN is 16, not 32, so a target of 2 mod 4
+    // is perfectly legal. In practice this trap has become unreachable from
+    // executing code -- jal and branch immediates are always even, and jalr
+    // clears the low bit -- but a debugger can still set an odd pc, and the
+    // check costs one instruction.
+    if (!out.trapped && out.halt == HaltReason::None && (out.next_pc & 1u) != 0) {
         raise(TrapCause::InstructionAddressMisaligned, out.next_pc);
     }
 

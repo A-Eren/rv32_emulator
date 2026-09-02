@@ -2,12 +2,13 @@
 
 [![build and test](https://github.com/A-Eren/rv32_emulator/actions/workflows/ci.yml/badge.svg)](https://github.com/A-Eren/rv32_emulator/actions/workflows/ci.yml)
 
-An RV32IM_Zicsr emulator, assembler and debugger built for **learning and
-teaching assembly**, with machine-mode interrupts. Not a fast emulator — a visible one. Every design decision
+An RV32IMC_Zicsr_Zifencei emulator, assembler and debugger built for **learning
+and teaching assembly**, with machine-mode interrupts. Not a fast emulator — a visible one. Every design decision
 serves three questions:
 
 1. **What exactly changed in this step?** — register and memory diff highlighting
-2. **How did this instruction become 32 bits?** — a bitfield breakdown panel
+2. **How did this instruction become 16 or 32 bits?** — a bitfield breakdown
+   panel, which for a compressed instruction also shows the one it expands to
 3. **Why did it not assemble?** — line, column, caret, and a suggested fix
 
 The editor suggests the instruction in a small block under the caret that folds
@@ -238,7 +239,9 @@ ctest --preset debug                    # everything
 With no reference toolchain available, correctness comes from three sources:
 
 - **Round-trip properties** — `encode(decode(w)) == w` over 500 000 random
-  words, plus every table row against itself. No golden files, and it catches
+  words, plus every table row against itself. The 16-bit space is small enough
+  to do properly: all 65 536 compressed halfwords are swept exhaustively, holes
+  included. No golden files, and it catches
   any misplaced bit mechanically.
 - **A semantic checklist** — each test cites the spec rule it enforces
   (`jalr` clearing the low bit, `div` by zero yielding −1, `srai` sign

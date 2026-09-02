@@ -46,6 +46,15 @@ std::string_view format_name(InstrFormat format) {
         case InstrFormat::B: return "B-type";
         case InstrFormat::U: return "U-type";
         case InstrFormat::J: return "J-type";
+        case InstrFormat::CR: return "CR-type";
+        case InstrFormat::CI: return "CI-type";
+        case InstrFormat::CSS: return "CSS-type";
+        case InstrFormat::CIW: return "CIW-type";
+        case InstrFormat::CL: return "CL-type";
+        case InstrFormat::CS: return "CS-type";
+        case InstrFormat::CA: return "CA-type";
+        case InstrFormat::CB: return "CB-type";
+        case InstrFormat::CJ: return "CJ-type";
     }
     return "?";
 }

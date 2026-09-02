@@ -238,11 +238,20 @@ and nothing pending, it halts and says so instead of waiting forever.
 
 ## Alignment
 
-Word and halfword accesses must be naturally aligned. A misaligned access raises
-`LoadAddressMisaligned` or `StoreAddressMisaligned` rather than being quietly
-emulated. This is deliberate: on the FPGA core this emulator is a reference for,
-a misaligned access is a real bug, and a named trap teaches alignment where
-silent success would hide it.
+**Data.** Word and halfword accesses must be naturally aligned. A misaligned
+access raises `LoadAddressMisaligned` or `StoreAddressMisaligned` rather than
+being quietly emulated. This is deliberate: on the FPGA core this emulator is a
+reference for, a misaligned access is a real bug, and a named trap teaches
+alignment where silent success would hide it.
+
+**Instructions follow a separate and looser rule.** With the C extension present
+IALIGN is 16, so an instruction need only be halfword-aligned: a compressed
+instruction can sit at any even address, and a 32-bit instruction may straddle a
+word boundary. The fetch reads a halfword, takes the width from its low two
+bits, and reads a second halfword only if it needs one. Only an *odd* pc raises
+`InstructionAddressMisaligned`, and nothing a program can execute reaches one —
+branch and jump immediates are always even, and `jalr` clears the low bit — so
+in practice that trap is reachable only by setting the pc from the debugger.
 
 ## Why `auipc` cannot address data
 
@@ -286,7 +295,11 @@ reg [31:0] imem [0:4095];
 initial $readmemh("imem.mem", imem);
 ```
 
-The byte address of line *n* is `n * 4`. `dmem.mem` packs the byte image
+The byte address of line *n* is `n * 4` — unchanged by the C extension, because
+the file is a picture of memory rather than a list of instructions. A line can
+hold two compressed instructions, or the tail of one 32-bit instruction and the
+head of the next; `--annotate` walks the halfword stream and names each
+instruction against the line it starts on. `dmem.mem` packs the byte image
 little-endian, so `.word 0x12345678` appears as the single line `12345678`.
 
 By default the CLI truncates the file at the high-water mark; `--pad` emits the

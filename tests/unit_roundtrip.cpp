@@ -11,6 +11,7 @@
 #include "isa/disasm.hpp"
 #include "isa/encode.hpp"
 #include "rv_test.hpp"
+#include "sample_operands.hpp"
 
 using namespace rv;
 using namespace rv::isa;
@@ -72,6 +73,15 @@ RV_TEST(roundtrip, canonical_words_survive_exactly) {
             operands.rs2 = static_cast<RegIdx>(rng() % 32);
             operands.csr = static_cast<CsrAddr>(rng() % 4096);
 
+            // The compressed forms accept a far narrower set of operands, so
+            // draw from what they can actually encode. Picking x8-x15 and a
+            // non-zero register covers both restrictions at once.
+            if (is_compressed_format(desc.format)) {
+                operands.rd = static_cast<RegIdx>(8 + rng() % 8);
+                operands.rs1 = static_cast<RegIdx>(8 + rng() % 8);
+                operands.rs2 = static_cast<RegIdx>(8 + rng() % 8);
+            }
+
             // Pick an immediate that is legal for this operand shape.
             switch (desc.syntax) {
                 case OperandSyntax::RD_RS1_IMM:
@@ -97,6 +107,56 @@ RV_TEST(roundtrip, canonical_words_survive_exactly) {
                 case OperandSyntax::RD_CSR_RS1:
                     operands.imm = 0;
                     break;
+
+                // ---- compressed --------------------------------------------
+                case OperandSyntax::C_RD_IMM:
+                case OperandSyntax::C_RDP_IMM:
+                    operands.imm = static_cast<i32>(rng() % 64) - 32;
+                    break;
+                case OperandSyntax::C_RD_UIMM:
+                    // Non-zero, and positioned at bits 17:12 like lui.
+                    operands.imm = static_cast<i32>(((rng() % 63) + 1) & 0x3fu) << 12;
+                    if ((operands.imm >> 12) & 0x20) operands.imm |= static_cast<i32>(0xfffc0000u);
+                    operands.rd = static_cast<RegIdx>(operands.rd == 2 ? 3 : operands.rd);
+                    break;
+                case OperandSyntax::C_RD_SHAMT:
+                case OperandSyntax::C_RDP_SHAMT:
+                    operands.imm = static_cast<i32>(rng() % 31) + 1;
+                    break;
+                case OperandSyntax::C_RDP_UIMM:
+                    operands.imm = static_cast<i32>((rng() % 255) + 1) * 4;
+                    break;
+                case OperandSyntax::C_IMM:
+                    operands.imm = (static_cast<i32>(rng() % 63) - 32) * 16;
+                    if (operands.imm == 0) operands.imm = 16;
+                    break;
+                case OperandSyntax::C_LBL:
+                    operands.imm = (static_cast<i32>(rng() % 4096) - 2048) & ~1;
+                    break;
+                case OperandSyntax::C_RS1P_LBL:
+                    operands.imm = (static_cast<i32>(rng() % 512) - 256) & ~1;
+                    break;
+                case OperandSyntax::C_RDP_OFS_RS1P:
+                case OperandSyntax::C_RS2P_OFS_RS1P:
+                    operands.imm = static_cast<i32>(rng() % 32) * 4;
+                    break;
+                case OperandSyntax::C_RD_OFS_SP:
+                case OperandSyntax::C_RS2_OFS_SP:
+                    operands.imm = static_cast<i32>(rng() % 64) * 4;
+                    operands.rs1 = 2;
+                    break;
+                case OperandSyntax::C_RD_RS2:
+                case OperandSyntax::C_RDP_RS2P:
+                case OperandSyntax::C_RS1:
+                    operands.imm = 0;
+                    break;
+            }
+
+            // c.nop and c.ebreak are single fixed encodings with no operands;
+            // the random registers above would be ignored on the way in and
+            // read back as zero, which is not a round-trip failure.
+            if (id == InstrId::C_NOP || id == InstrId::C_EBREAK) {
+                operands = Operands{};
             }
 
             const EncodeResult encoded = encode(id, operands);
@@ -116,7 +176,7 @@ RV_TEST(roundtrip, disassembly_is_never_empty_and_names_the_instruction) {
     for (std::size_t i = 0; i < kInstrCount; ++i) {
         const auto id = static_cast<InstrId>(i);
         const InstrDesc& desc = describe(id);
-        const EncodeResult encoded = encode(id, Operands{});
+        const EncodeResult encoded = encode(id, sample::operands_for(id));
         RV_CHECK(encoded.ok());
 
         const std::string text = disassemble_word(encoded.word, 0);

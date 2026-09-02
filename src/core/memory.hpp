@@ -43,6 +43,9 @@ public:
     // return 0 and out-of-range writes are dropped, so a memory viewer can
     // scroll past the end of RAM without special-casing every call site.
     u32 read_word_raw(Addr addr) const;
+    /// Halfword read, for fetching a compressed instruction and for assembling
+    /// a 32-bit one that straddles a word boundary.
+    u16 read_half_raw(Addr addr) const;
     void write_word_raw(Addr addr, u32 value);
     u8 read_byte_raw(Addr addr) const;
 
