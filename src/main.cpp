@@ -26,7 +26,7 @@ namespace {
 
 using namespace rv;
 
-constexpr const char* kVersion = "rv32 0.1.0 (RV32IMC_Zicsr_Zifencei)";
+constexpr const char* kVersion = "rv32 " RV32_VERSION " (RV32IMC_Zicsr_Zifencei)";
 
 void print_usage() {
     std::puts(

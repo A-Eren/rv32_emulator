@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(rv32_emulator LANGUAGES CXX)
+project(rv32_emulator VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -91,6 +91,10 @@ add_library(rv_cmd STATIC
 )
 target_link_libraries(rv_cmd PUBLIC rv_dbg)
 rv_set_warnings(rv_cmd)
+# The version is declared once, in project() above, and reaches both
+# front-ends through the library they share -- so a tag cannot say one
+# thing and `--version` another.
+target_compile_definitions(rv_cmd PUBLIC RV32_VERSION="${PROJECT_VERSION}")
 
 # ---------------------------------------------------------------------------
 # rv_gui -- the desktop interface.

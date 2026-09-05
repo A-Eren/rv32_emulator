@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
     QApplication::setWindowIcon(icon);
     QGuiApplication::setDesktopFileName("rv32");
     apply_dark_theme();
-    QApplication::setApplicationVersion("0.1.0");
+    QApplication::setApplicationVersion(RV32_VERSION);
 
     QCommandLineParser parser;
     parser.setApplicationDescription("RV32IMC_Zicsr_Zifencei emulator, assembler and debugger");
