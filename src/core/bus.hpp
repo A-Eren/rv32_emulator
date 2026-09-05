@@ -107,6 +107,11 @@ public:
     /// is what makes interrupts reproducible under reverse stepping.
     u32 pending_interrupts(u64 now) const;
 
+    /// Publish the clock to every device. Called whenever the cycle counter
+    /// moves, undo included, so a device whose registers change with time never
+    /// has to count for itself -- see Device::set_now.
+    void set_now(u64 now);
+
     /// The device a step wrote to, or npos. The history needs this to know
     /// whose aux state to capture.
     static constexpr std::size_t kNoSlot = ~std::size_t{0};

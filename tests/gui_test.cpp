@@ -236,6 +236,64 @@ RV_TEST(gui, the_encoding_panel_names_the_scrambled_branch_immediate) {
     RV_CHECK(has(fields, "imm[4:1|11]"));
 }
 
+RV_TEST(gui, the_encoding_panel_renders_a_compressed_instruction_at_16_bits) {
+    // The panel is driven by InstrFormat, so the compressed layouts are a
+    // different set of field tables rather than the 32-bit one with bits
+    // hidden. The op field being two bits wide is the giveaway that the right
+    // one was picked.
+    Fixture fixture(
+        "        c.li a0, 5\n"
+        "        ebreak\n");
+    auto* encoding = fixture.window.findChild<EncodingWidget*>();
+    encoding->set_address(0);
+
+    const QStringList fields = encoding->field_summary();
+    RV_CHECK(has(fields, "funct3"));
+    RV_CHECK(has(fields, "rd/rs1=x10 (a0)"));
+    RV_CHECK(has(fields, "imm[4:0]=5"));
+    RV_CHECK(has(fields, "op=0x1 c.li"));
+    // The 32-bit layout must not have been used: there is no funct7 in 16 bits.
+    RV_CHECK(!has(fields, "funct7"));
+}
+
+RV_TEST(gui, the_encoding_panel_names_the_scattered_compressed_offsets) {
+    // c.lw and c.swsp both encode a word offset and scatter it differently.
+    // Naming which bits go where is the only way that is ever visible.
+    Fixture fixture(
+        "        c.lw a0, 8(a1)\n"
+        "        c.swsp a0, 8(sp)\n"
+        "        ebreak\n");
+    auto* encoding = fixture.window.findChild<EncodingWidget*>();
+
+    encoding->set_address(0);
+    const QStringList lw = encoding->field_summary();
+    RV_CHECK(has(lw, "off[5:3]"));
+    RV_CHECK(has(lw, "off[2|6]"));
+    RV_CHECK(has(lw, "rs1'=x11 (a1)"));
+
+    encoding->set_address(2);
+    const QStringList swsp = encoding->field_summary();
+    RV_CHECK(has(swsp, "off[5:2|7:6]"));
+    RV_CHECK(has(swsp, "rs2=x10 (a0)"));
+}
+
+RV_TEST(gui, a_compressed_instruction_in_the_last_halfword_of_imem_still_decodes) {
+    // read_imem_word would return 0 here, because the word it wants runs off
+    // the end. The panel has to fetch the way the hart does.
+    Fixture fixture(
+        "        c.li a0, 5\n"
+        "        ebreak\n");
+    auto* encoding = fixture.window.findChild<EncodingWidget*>();
+    const Addr last_half = fixture.session().hart().imem().size() - 2;
+    encoding->set_address(last_half);
+    // Nothing is loaded there, so it decodes as an illegal halfword rather
+    // than crashing or silently showing the wrong instruction.
+    RV_CHECK(encoding->field_summary().isEmpty());
+
+    encoding->set_address(0);
+    RV_CHECK(has(encoding->field_summary(), "op=0x1 c.li"));
+}
+
 RV_TEST(gui, the_encoding_panel_follows_the_caret_before_anything_runs) {
     Fixture fixture;
     auto* encoding = fixture.window.findChild<EncodingWidget*>();
@@ -508,6 +566,47 @@ RV_TEST(gui, a_block_and_a_custom_peripheral_get_fields_to_type_into) {
     first->setText("0x2a");
     emit first->editingFinished();
     RV_CHECK_EQ(bus.load(core::slot_address(0), 4, false).value, 42u);
+}
+
+RV_TEST(gui, a_peripheral_that_computes_offers_only_its_operands) {
+    Fixture fixture;
+    core::Bus& bus = fixture.session().hart().bus();
+    bus.detach_all();
+    core::Device* mul = bus.attach(0, core::make_device("function", 8, "multiplier"));
+    RV_CHECK(mul != nullptr);
+    if (mul == nullptr) return;
+
+    auto* panel = fixture.window.findChild<DevicePanel*>();
+    panel->refresh();
+    QTableWidget* list = panel->findChild<QTableWidget*>();
+    list->selectRow(0);
+
+    auto* controls = panel->findChild<QGroupBox*>();
+    RV_CHECK(controls != nullptr);
+    if (controls == nullptr) return;
+
+    // Two operands and nothing else: the result and the status are computed,
+    // so there is nothing there for a person to set.
+    const QList<QLineEdit*> fields = controls->findChildren<QLineEdit*>();
+    RV_CHECK_EQ(fields.size(), 2);
+    if (fields.size() != 2) return;
+
+    fields[0]->setText("12");
+    emit fields[0]->editingFinished();
+    fields[1]->setText("12");
+    emit fields[1]->editingFinished();
+    RV_CHECK_EQ(bus.load(core::slot_address(0), 4, false).value, 12u);
+
+    // The panel names it and says what it is holding, like any other device:
+    // columns are slot, address, name, type, state.
+    panel->refresh();
+    RV_CHECK_STR(list->item(0, 2)->text().toStdString(), "multiplier");
+    RV_CHECK_STR(list->item(0, 3)->text().toStdString(), "function");
+    // The operands it now holds, and idle -- typing into a field is the
+    // person's path, so it loads the register without starting the peripheral.
+    // Only a store from the program does that.
+    RV_CHECK_NE(list->item(0, 4)->text().indexOf("a=12 b=12"), -1);
+    RV_CHECK_NE(list->item(0, 4)->text().indexOf("idle"), -1);
 }
 
 RV_TEST(gui, the_exported_images_are_as_deep_as_the_machine) {

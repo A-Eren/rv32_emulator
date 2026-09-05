@@ -519,6 +519,209 @@ RV_TEST(devices, a_custom_peripheral_is_named_readable_and_writable) {
     RV_CHECK_EQ(sensor->peek(0), 7u);
 }
 
+// ---- a peripheral that computes -------------------------------------------
+
+RV_TEST(devices, a_function_device_computes_rather_than_remembers) {
+    // The gap `custom` cannot close. A register file hands back what it was
+    // given; an IP core's output is a function of its input, and this is the
+    // difference between the two.
+    FunctionDevice mul(FunctionOp::Mul, 8, 7, "multiplier");
+    mul.set_now(100);
+    mul.write(FunctionDevice::kOffsetA, 4, 31);
+    mul.write(FunctionDevice::kOffsetB, 4, 31);
+
+    // The write cycle itself reads idle, then seven cycles of busy, then done:
+    // the count the homework's controller keeps, in this machine's clock.
+    RV_CHECK_EQ(mul.status(), FunctionDevice::kIdle);
+    for (u32 elapsed = 1; elapsed <= 7; ++elapsed) {
+        mul.set_now(100 + elapsed);
+        RV_CHECK_EQ(mul.status(), FunctionDevice::kBusy);
+    }
+    mul.set_now(108);
+    RV_CHECK_EQ(mul.status(), FunctionDevice::kDone);
+
+    // 31 * 31 = 961 = 0x03c1, read back as two 8-bit halves.
+    RV_CHECK_HEX(mul.peek(FunctionDevice::kResultLow), 0xc1u);
+    RV_CHECK_HEX(mul.peek(FunctionDevice::kResultHigh), 0x03u);
+    RV_CHECK_HEX(mul.peek(FunctionDevice::kOffsetA), 31u);
+}
+
+RV_TEST(devices, any_write_to_a_function_device_restarts_it) {
+    // The rule the homework's guideline warns about, reproduced rather than
+    // smoothed over: a program that writes while polling never sees a result,
+    // and finding that out on the emulator is the point.
+    FunctionDevice mul(FunctionOp::Mul, 8, 7, "multiplier");
+    mul.set_now(0);
+    mul.write(FunctionDevice::kOffsetA, 4, 6);
+    mul.write(FunctionDevice::kOffsetB, 4, 7);
+    mul.set_now(8);
+    RV_CHECK_EQ(mul.status(), FunctionDevice::kDone);
+
+    // A store to the status register loads nothing -- and still restarts it.
+    mul.write(FunctionDevice::kStatus, 4, 0);
+    RV_CHECK_EQ(mul.status(), FunctionDevice::kIdle);
+    mul.set_now(9);
+    RV_CHECK_EQ(mul.status(), FunctionDevice::kBusy);
+    RV_CHECK_HEX(mul.peek(FunctionDevice::kOffsetA), 6u);  // nothing was loaded
+}
+
+RV_TEST(devices, a_function_device_latches_its_result) {
+    // While one operation is in flight the result registers still hold the
+    // last one. The RTL has to latch because its product is combinational;
+    // reproducing it is what makes a program that reads too early wrong here
+    // in the same way it is wrong on the board.
+    FunctionDevice mul(FunctionOp::Mul, 8, 7, "multiplier");
+    mul.set_now(0);
+    mul.write(FunctionDevice::kOffsetA, 4, 3);
+    mul.write(FunctionDevice::kOffsetB, 4, 5);
+    mul.set_now(8);
+    RV_CHECK_HEX(mul.result(), 15u);
+
+    mul.set_now(9);
+    mul.write(FunctionDevice::kOffsetB, 4, 9);  // 3 * 9 = 27, once it finishes
+    mul.set_now(12);
+    RV_CHECK_EQ(mul.status(), FunctionDevice::kBusy);
+    RV_CHECK_HEX(mul.result(), 15u);  // still the one before
+    mul.set_now(17);
+    RV_CHECK_HEX(mul.result(), 27u);
+}
+
+RV_TEST(devices, peeking_a_function_device_does_not_start_it) {
+    // A memory view redraws constantly, and the Devices panel calls
+    // state_summary on every refresh. Either restarting the peripheral would
+    // mean a program's timing depended on whether anyone was looking.
+    FunctionDevice mul(FunctionOp::Mul, 8, 7, "multiplier");
+    mul.set_now(0);
+    mul.write(FunctionDevice::kOffsetA, 4, 2);
+    mul.write(FunctionDevice::kOffsetB, 4, 2);
+    for (int i = 0; i < 50; ++i) {
+        (void)mul.peek(FunctionDevice::kStatus);
+        (void)mul.state_summary();
+    }
+    mul.set_now(8);
+    RV_CHECK_EQ(mul.status(), FunctionDevice::kDone);
+    RV_CHECK_HEX(mul.result(), 4u);
+
+    // Nor does setting a register by hand from the memory view. That is the
+    // person's path, not the program's: only a store starts the peripheral.
+    mul.poke(FunctionDevice::kOffsetA, 5);
+    RV_CHECK_EQ(mul.status(), FunctionDevice::kDone);
+    RV_CHECK_HEX(mul.result(), 10u);
+}
+
+RV_TEST(devices, a_function_device_is_as_wide_as_it_was_ordered) {
+    // Operands are masked to the width, and the result comes back as two
+    // halves of that width -- an 8 x 8 IP cannot be handed 300.
+    FunctionDevice narrow(FunctionOp::Mul, 4, 1, "nibbles");
+    narrow.set_now(0);
+    narrow.write(FunctionDevice::kOffsetA, 4, 0xff);  // masked to 0xf
+    narrow.write(FunctionDevice::kOffsetB, 4, 0xf);
+    narrow.set_now(2);
+    RV_CHECK_HEX(narrow.result(), 225u);                              // 15 * 15
+    RV_CHECK_HEX(narrow.peek(FunctionDevice::kResultLow), 0x1u);      // 0xe1 low nibble
+    RV_CHECK_HEX(narrow.peek(FunctionDevice::kResultHigh), 0xeu);
+
+    // The widest it can be ordered still fits its result in one register.
+    FunctionDevice wide(FunctionOp::Mul, kMaxFunctionWidth, 1, "wide");
+    wide.set_now(0);
+    wide.write(FunctionDevice::kOffsetA, 4, 0xffff);
+    wide.write(FunctionDevice::kOffsetB, 4, 0xffff);
+    wide.set_now(2);
+    RV_CHECK_HEX(wide.result(), 0xfffe'0001u);
+}
+
+RV_TEST(devices, reverse_stepping_undoes_a_write_to_a_function_device) {
+    // A write moves three things no register holds: which operand is loaded,
+    // when the operation started, and the result the one before it left
+    // behind. The claim is that the ordinary one-word delta plus the aux field
+    // still covers it, with no per-device history.
+    Machine m;
+    Bus& bus = m.hart().bus();
+    bus.detach_all();
+    auto* mul = dynamic_cast<FunctionDevice*>(
+        bus.attach(0, std::make_unique<FunctionDevice>(FunctionOp::Mul, 8, 1, "multiplier")));
+    RV_CHECK(mul != nullptr);
+    if (mul == nullptr) return;
+
+    // Set up an operation by hand and let the clock carry it to done, so there
+    // is a latched result for the store to displace. After loading, not
+    // before: loading resets the machine, and a reset clears a peripheral.
+    m.load(store_program(FunctionDevice::kOffsetA, 9));
+    mul->poke(FunctionDevice::kOffsetA, 3);
+    mul->poke(FunctionDevice::kOffsetB, 4);
+
+    rv::dbg::StepHistory history(64);
+    for (int i = 0; i < 3; ++i) history.record(m.hart().step(), m.hart());
+    RV_CHECK_EQ(mul->status(), FunctionDevice::kDone);
+    RV_CHECK_HEX(mul->result(), 12u);
+
+    history.record(m.hart().step(), m.hart());  // the store: A <- 9
+    RV_CHECK_HEX(mul->peek(FunctionDevice::kOffsetA), 9u);
+    // Busy rather than idle: idle lasts exactly the cycle the write lands on,
+    // so between two instructions the clock has already moved past it. That is
+    // the RTL's behaviour too -- nothing can read the status in the cycle it
+    // wrote, which is why a poll loop always sees busy at least once.
+    RV_CHECK_EQ(mul->status(), FunctionDevice::kBusy);
+    RV_CHECK_HEX(mul->result(), 12u);  // the finished one, latched on the way past
+
+    history.undo(m.hart());
+    RV_CHECK_HEX(mul->peek(FunctionDevice::kOffsetA), 3u);
+    RV_CHECK_EQ(mul->status(), FunctionDevice::kDone);
+    RV_CHECK_HEX(mul->result(), 12u);
+}
+
+RV_TEST(devices, a_function_device_round_trips_through_a_file) {
+    const DeviceConfig config = parse_device_config(
+        "[[device]]\n"
+        "type = \"function\"\n"
+        "name = \"multiplier\"\n"
+        "address = 0xffff0060\n"
+        "operation = \"mul\"\n"
+        "latency = 7\n"
+        "size = 8\n",
+        "test.toml");
+    RV_CHECK_STR(config.error, "");
+
+    Machine m;
+    RV_CHECK_STR(apply_device_config(m.hart().bus(), config), "");
+    auto* mul = dynamic_cast<FunctionDevice*>(m.hart().bus().device_for_address(0xffff'0060u));
+    RV_CHECK(mul != nullptr);
+    if (mul == nullptr) return;
+    RV_CHECK_STR(mul->label(), "multiplier");
+    RV_CHECK_EQ(mul->width(), 8);
+    RV_CHECK_EQ(mul->latency(), 7u);
+    // Five registers one word apart do not fit in a sixteen-byte slot, so the
+    // status register lands in the second one.
+    RV_CHECK_EQ(mul->slot_count(), std::size_t{2});
+    RV_CHECK_EQ(m.hart().bus().device_for_address(0xffff'0070u), mul);
+
+    // What it computes, how wide and how long it takes all survive a save.
+    const DeviceConfig again = parse_device_config(write_device_config(describe(m.hart().bus())),
+                                                   "again.toml");
+    RV_CHECK_STR(again.error, "");
+    bool found = false;
+    for (const DeviceSpec& spec : again.devices) {
+        if (spec.type != "function") continue;
+        found = true;
+        RV_CHECK_STR(spec.operation, "mul");
+        RV_CHECK_EQ(spec.latency, 7u);
+        RV_CHECK_EQ(spec.size, 8u);
+        RV_CHECK_STR(spec.name, "multiplier");
+    }
+    RV_CHECK(found);
+}
+
+RV_TEST(devices, an_unknown_operation_names_what_is_known) {
+    const DeviceConfig config = parse_device_config(
+        "[[device]]\n"
+        "type = \"function\"\n"
+        "operation = \"integrate\"\n",
+        "test.toml");
+    RV_CHECK(!config.ok());
+    RV_CHECK(config.error.find("test.toml:3") != std::string::npos);
+    RV_CHECK(config.error.find("mul") != std::string::npos);
+}
+
 RV_TEST(devices, a_custom_peripheral_can_raise_an_interrupt) {
     // The point of it being custom: a student can build the source, not only
     // handle one somebody else provided.

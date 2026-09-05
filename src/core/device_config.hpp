@@ -31,12 +31,23 @@ enum class SizeUnit : u8 {
     Bytes,
     /// 32-bit registers, for a peripheral counted in registers.
     Words,
+    /// Bits of one operand, for a peripheral that computes. Bits again, but a
+    /// separate list: an IP core is ordered by how wide it multiplies, the
+    /// widths on offer stop where the result stops fitting in a register, and
+    /// the one to open on is the one the course hands out rather than the
+    /// widest.
+    OperandBits,
 };
 
 /// The sizes worth offering for each unit. Powers of two, for the same reason
 /// the memory list is: this is hardware, and a width or a depth that is not one
 /// wastes what it is built from.
 const std::vector<u32>& common_sizes(SizeUnit unit);
+
+/// The one to offer first: what a person means by a device of this kind when
+/// they do not say. Named rather than an index into the list above, so that
+/// adding a size does not silently move it.
+u32 default_size(SizeUnit unit);
 
 /// "16 KB - 4096 x 32-bit". Both halves matter: the bytes are what the machine
 /// has, the depth is what a block memory is ordered by.
@@ -78,6 +89,13 @@ struct DeviceSpec {
     int digits = 4;
     /// What a custom peripheral calls itself.
     std::string name;
+    /// Which behaviour a function device has. Empty means the default.
+    std::string operation;
+    /// Cycles a function device reports busy for. `has_latency` distinguishes
+    /// "the file asked for none" from "the file did not say", and only the
+    /// second takes the default.
+    u32 latency = 0;
+    bool has_latency = false;
 };
 
 struct DeviceConfig {

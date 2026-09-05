@@ -35,6 +35,11 @@ struct AssembleOptions {
 
 struct AssembledProgram {
     std::vector<Word> imem_words;
+    /// Bytes of code actually emitted, before the image is rounded up to a
+    /// whole word. Not the same as `imem_words.size() * 4` once compressed
+    /// instructions exist: a program ending on an odd halfword is padded by two
+    /// bytes it did not ask for.
+    std::size_t imem_bytes = 0;
     std::vector<u8> dmem_bytes;
     SymbolTable symbols;
     SourceMap map;

@@ -1,9 +1,14 @@
 // The bitfield breakdown panel.
 //
 // The same idea as the terminal version, drawn properly: one renderer driven by
-// InstrFormat, so six small field tables cover the whole instruction set. It
-// answers "how did this line become 32 bits?", and it follows the editor's
-// caret so a line explains itself before it has ever been run.
+// InstrFormat, so fifteen small field tables cover the whole instruction set --
+// six base formats and the nine compressed ones. It answers "how did this line
+// become 16 or 32 bits?", and it follows the editor's caret so a line explains
+// itself before it has ever been run.
+//
+// For a compressed instruction it also shows the base instruction the encoding
+// stands for, which is the part worth teaching: c.addi is not a new operation,
+// it is addi with the operands folded together.
 #pragma once
 
 #include <QWidget>

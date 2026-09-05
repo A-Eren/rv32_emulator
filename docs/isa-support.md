@@ -1,7 +1,7 @@
 # What is implemented
 
-**RV32IM_Zicsr**, machine mode only, with machine-mode interrupts. The
-`misa` register reads `0x40001100`.
+**RV32IMC_Zicsr_Zifencei**, machine mode only, with machine-mode interrupts.
+The `misa` register reads `0x40001104`.
 
 The authoritative list is `src/isa/instr_table.def` — this document describes
 it, but that file *is* it: the decoder, the disassembler, the encoder and the
@@ -18,9 +18,70 @@ assembler are all generated from those rows.
 
 **Zicsr (6)** — `csrrw csrrs csrrc csrrwi csrrsi csrrci`.
 
-**System (5)** — `fence ecall ebreak mret wfi`. `fence` is architecturally a
-no-op on a single in-order hart. `wfi` advances the cycle counter to the armed
-timer's deadline rather than spinning; see the interrupt section below.
+**C (27)** — 16-bit encodings, listed by quadrant below.
+
+**System (6)** — `fence fence.i ecall ebreak mret wfi`. `fence` is
+architecturally a no-op on a single in-order hart. `fence.i` (Zifencei) is one
+for a stronger reason: the machine is Harvard, so a program cannot write the
+instruction stream it fetches from and there is never a stale fetch to flush.
+Both must still assemble, because code written against a real toolchain contains
+them. `wfi` advances the cycle counter to the armed timer's deadline rather than
+spinning; see the interrupt section below.
+
+## The C extension
+
+| Quadrant | Instructions |
+|---|---|
+| Q0 (`op=00`) | `c.addi4spn c.lw c.sw` |
+| Q1 (`op=01`) | `c.addi c.nop c.jal c.li c.addi16sp c.lui c.srli c.srai c.andi c.sub c.xor c.or c.and c.j c.beqz c.bnez` |
+| Q2 (`op=10`) | `c.slli c.lwsp c.jr c.mv c.ebreak c.jalr c.add c.swsp` |
+
+Absent from Q0 and Q2 are the `funct3 = 001/011/101/111` slots, which are
+`c.fld`/`c.flw`/`c.fsd`/`c.fsw` and the RV64-only `c.ld`/`c.sd` — excluded along
+with F, D and RV64 themselves.
+
+**Every compressed instruction is an alias.** `c.addi a0, 1` *is*
+`addi a0, a0, 1`; the C extension adds no operations, only shorter spellings of
+ones RV32I already had. The emulator takes that literally: `src/isa/expand.cpp`
+rewrites each compressed instruction into the base instruction it stands for,
+and `src/core/exec.cpp` has no compressed cases at all. All 27 inherit semantics
+that were already tested rather than getting a second implementation that can
+drift from the first. The encoding panel shows both forms side by side, which is
+the part worth teaching.
+
+**Registers.** The 3-bit fields (written `rd'`, `rs1'`, `rs2'`) reach only
+`x8-x15` — `s0`, `s1` and `a0-a5`. Choosing those eight rather than any eight is
+what makes the encoding pay for itself. `c.lw t0, 8(a1)` does not assemble, and
+says so:
+
+```
+error[E0107]: 'c.lw' cannot reach t0
+help: this form encodes its registers in 3 bits, so it can only use
+      s0, s1, a0-a5 (x8-x15); use the 32-bit form for anything else
+```
+
+**Nothing is compressed automatically.** Writing `addi a0, a0, 1` always
+produces four bytes; you get two only by writing `c.addi a0, 1`. This keeps the
+rule stated under *Pseudo-instructions* below — sizes are fixed at parse time —
+true for real instructions too, and it keeps the disassembly a literal echo of
+the source. The cost is that you must know the short form exists; the editor's
+completion list and operand hints are generated from the same table, so typing
+`c.` shows all 27 with their real ranges.
+
+**Reserved encodings.** Several holes in the encoding space cannot be written as
+a match/mask — each is "this field must not be zero", and a mask can only say
+"these bits are fixed" — so `src/isa/decode.cpp` enforces them by hand:
+`c.addi4spn` with `nzuimm == 0`, `c.addi16sp` and `c.lui` with `imm == 0`,
+`c.lui` with `rd == 0`, `c.jr`/`c.jalr` with `rs1 == x0`, and `c.lwsp` with
+`rd == x0`. The first
+carries real weight: `0x0000` is a `c.addi4spn`, and it has to stay illegal or
+running off the end of a program into zeroed memory would quietly execute
+instead of halting.
+
+The spec's HINT encodings — `c.mv` and `c.addi` with `rd == x0`, a shift of zero
+— are legal and execute as nops, so the decoder accepts them and the
+disassembler round-trips them. The *assembler* still refuses to write one, since
+typing it is almost always a mistake.
 
 ## Pseudo-instructions
 
@@ -48,21 +109,25 @@ A directive name is only a directive in the leading position, so `.zero` and
 
 `mstatus misa mie mtvec mscratch mepc mcause mtval mip`,
 `mvendorid marchid mimpid mhartid`,
+`mcycle mcycleh minstret minstreth`,
 `cycle cycleh time instret instreth timeh`.
 
 Each has a WARL write mask, so reserved bits read back at their reset value
-rather than accepting anything. The counters are read-only: `csrrw` targeting
-one raises IllegalInstruction rather than silently doing nothing. `time`
-mirrors `cycle`, which is the honest thing to report for a machine with no real
-clock.
+rather than accepting anything. The user-mode counter shadows at `0xc00`-`0xc82`
+are read-only: `csrrw` targeting one raises IllegalInstruction rather than
+silently doing nothing. Their machine-mode counterparts `mcycle` and `minstret`
+*are* writable, as the spec requires, and a write moves the hart's own counter
+rather than being overwritten by the next refresh — so `csrw mcycle, zero` really
+does zero it before a measurement.
+
+`time` mirrors `cycle`, which is the honest thing to report for a machine with
+no real clock.
 
 ## Deliberately absent
 
 Not oversights — each was ruled out because it costs a milestone and buys
 nothing for learning assembly on a small FPGA core:
 
-- **C (compressed)** — 16-bit instructions. Everything here assumes 4-byte
-  alignment, including `mepc` and the misaligned-fetch trap.
 - **F/D (floating point)** — implementable in the emulator, heavy to synthesise.
 - **A (atomics)** — one hart, so nothing to be atomic against.
 - **User and supervisor mode, PMP, `satp`, interrupt delegation** — most of the
@@ -88,8 +153,10 @@ then software, then timer.
 
 The difference from an exception, and the thing handlers get wrong: `mepc`
 points at the instruction that has **not** run yet. `mret` resumes it. An ecall
-handler must advance `mepc` by 4 or the ecall re-executes forever; an interrupt
-handler must **not**, or it silently drops an instruction. `tests/asm/t_trap.s`
+handler must advance `mepc` past the ecall or it re-executes forever — by 4 for
+`ecall`, or by 2 if the trap came from a compressed instruction, which is why a
+general handler reads the instruction rather than assuming; an interrupt handler
+must **not** advance it at all, or it silently drops an instruction. `tests/asm/t_trap.s`
 checks both, and deliberately introducing the second mistake makes it fail.
 
 Acknowledging is the program's job. A pending line that the handler does not
@@ -111,8 +178,17 @@ explicitly, each citing the spec:
 - `jalr` clears the low bit of the computed target, and computes it before
   writing the link register, so `jalr ra, ra, 0` jumps to the old `ra`.
 - `auipc` is relative to its own address, not `pc + 4`.
-- Branch and jump targets off a 4-byte boundary raise
-  InstructionAddressMisaligned.
+- With the C extension present IALIGN is 16, so a branch or jump target two
+  past a word boundary is a perfectly ordinary address — it is where the second
+  of two compressed instructions in a word lives. Only an *odd* target raises
+  InstructionAddressMisaligned, which nothing a program can execute reaches:
+  branch and jump immediates are always even, and `jalr` clears the low bit. The
+  check is still there because a debugger can set an odd pc.
+- A 32-bit instruction may straddle a word boundary. Once code is a halfword
+  stream nothing keeps four-byte instructions on four-byte addresses, so the
+  fetch reads a halfword, decides the width from its low two bits, and reads the
+  second halfword only if it needs it.
+- `mepc` holds bit 1 but not bit 0, for the same reason.
 - Misaligned loads and stores trap rather than being emulated — on the FPGA
   core this is a reference for, a misaligned access is a real bug.
 - Division never traps: `x / 0` is all ones, `x % 0` is `x`,

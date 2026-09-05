@@ -32,7 +32,13 @@ std::string csr_text(CsrAddr csr) {
 std::string disassemble(const DecodedInstr& instr, Addr pc, const DisasmOptions& options) {
     if (!instr.valid()) {
         char buffer[32];
-        std::snprintf(buffer, sizeof buffer, ".word 0x%08x", instr.raw);
+        // Render at the width the bits actually occupy: showing a bad halfword
+        // as eight digits would invent four the fetch never looked at.
+        if (instr.length == 2) {
+            std::snprintf(buffer, sizeof buffer, ".half 0x%04x", instr.raw & 0xffffu);
+        } else {
+            std::snprintf(buffer, sizeof buffer, ".word 0x%08x", instr.raw);
+        }
         return buffer;
     }
 
@@ -75,6 +81,41 @@ std::string disassemble(const DecodedInstr& instr, Addr pc, const DisasmOptions&
             return text + " " + rd() + ", " + csr_text(instr.csr) + ", " + rs1();
         case OperandSyntax::RD_CSR_ZIMM:
             return text + " " + rd() + ", " + csr_text(instr.csr) + ", " + imm();
+
+        // ---- compressed ----------------------------------------------------
+        // The operand *shapes* collapse to far fewer cases than the syntaxes,
+        // because the syntaxes are split by what the encoding accepts rather
+        // than by how it prints. c.addi and c.slli look the same here and
+        // differ only in the range the assembler will take.
+        case OperandSyntax::C_RD_IMM:
+        case OperandSyntax::C_RD_SHAMT:
+        case OperandSyntax::C_RDP_IMM:
+        case OperandSyntax::C_RDP_UIMM:
+        case OperandSyntax::C_RDP_SHAMT:
+            return text + " " + rd() + ", " + imm();
+        case OperandSyntax::C_RD_UIMM: {
+            // c.lui, like lui, is written with the upper bits as the operand.
+            char buffer[16];
+            std::snprintf(buffer, sizeof buffer, "0x%x", (static_cast<u32>(instr.imm) >> 12) & 0x3fu);
+            return text + " " + rd() + ", " + buffer;
+        }
+        case OperandSyntax::C_RD_RS2:
+        case OperandSyntax::C_RDP_RS2P:
+            return text + " " + rd() + ", " + rs2();
+        case OperandSyntax::C_RS1:
+            return text + " " + rs1();
+        case OperandSyntax::C_IMM:
+            return text + " " + imm();
+        case OperandSyntax::C_LBL:
+            return text + " " + target();
+        case OperandSyntax::C_RS1P_LBL:
+            return text + " " + rs1() + ", " + target();
+        case OperandSyntax::C_RDP_OFS_RS1P:
+        case OperandSyntax::C_RD_OFS_SP:
+            return text + " " + rd() + ", " + imm() + "(" + rs1() + ")";
+        case OperandSyntax::C_RS2P_OFS_RS1P:
+        case OperandSyntax::C_RS2_OFS_SP:
+            return text + " " + rs2() + ", " + imm() + "(" + rs1() + ")";
     }
     return text;
 }

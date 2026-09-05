@@ -2,12 +2,13 @@
 
 [![build and test](https://github.com/A-Eren/rv32_emulator/actions/workflows/ci.yml/badge.svg)](https://github.com/A-Eren/rv32_emulator/actions/workflows/ci.yml)
 
-An RV32IM_Zicsr emulator, assembler and debugger built for **learning and
-teaching assembly**, with machine-mode interrupts. Not a fast emulator — a visible one. Every design decision
+An RV32IMC_Zicsr_Zifencei emulator, assembler and debugger built for **learning
+and teaching assembly**, with machine-mode interrupts. Not a fast emulator — a visible one. Every design decision
 serves three questions:
 
 1. **What exactly changed in this step?** — register and memory diff highlighting
-2. **How did this instruction become 32 bits?** — a bitfield breakdown panel
+2. **How did this instruction become 16 or 32 bits?** — a bitfield breakdown
+   panel, which for a compressed instruction also shows the one it expands to
 3. **Why did it not assemble?** — line, column, caret, and a suggested fix
 
 The editor suggests the instruction in a small block under the caret that folds
@@ -131,7 +132,14 @@ conhost does not do by itself.
 ./build/debug/rv32 test tests/asm/*.s          # self-checking assembly tests
 ./build/debug/rv32 dbg examples/fib.s          # interactive debugger
 ./build/debug/rv32-gui examples/fib.s          # the desktop window
+
+./build/debug/rv32 run examples/fib.s --devices examples/board.toml
 ```
+
+`--devices` gives the run the machine a board file describes: its peripherals
+and its memory sizes both. The same file the GUI loads with `File → Load
+peripherals`, so a machine assembled by hand in the window can be handed
+straight to a script. See [docs/memory-map.md](docs/memory-map.md).
 
 The debugger steps by source line by default, so a `li` that expands to two
 instructions counts as one step — and `si` shows the seam:
@@ -238,7 +246,9 @@ ctest --preset debug                    # everything
 With no reference toolchain available, correctness comes from three sources:
 
 - **Round-trip properties** — `encode(decode(w)) == w` over 500 000 random
-  words, plus every table row against itself. No golden files, and it catches
+  words, plus every table row against itself. The 16-bit space is small enough
+  to do properly: all 65 536 compressed halfwords are swept exhaustively, holes
+  included. No golden files, and it catches
   any misplaced bit mechanically.
 - **A semantic checklist** — each test cites the spec rule it enforces
   (`jalr` clearing the low bit, `div` by zero yielding −1, `srai` sign

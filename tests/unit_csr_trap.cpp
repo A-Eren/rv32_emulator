@@ -15,6 +15,10 @@ constexpr rv::CsrAddr kMepc = 0x341;
 constexpr rv::CsrAddr kMcause = 0x342;
 constexpr rv::CsrAddr kMtval = 0x343;
 constexpr rv::CsrAddr kCycle = 0xc00;
+constexpr rv::CsrAddr kInstret = 0xc02;
+constexpr rv::CsrAddr kMcycle = 0xb00;
+constexpr rv::CsrAddr kMinstret = 0xb02;
+constexpr rv::CsrAddr kMisa = 0x301;
 
 rv::u32 read_csr(Machine& m, rv::CsrAddr addr) { return m.hart().cpu().csr.read(addr); }
 void poke_csr(Machine& m, rv::CsrAddr addr, rv::u32 value) {
@@ -126,6 +130,95 @@ RV_TEST(csr_trap, reading_a_read_only_csr_is_fine) {
     // The counter is refreshed before each instruction, so the second read sees
     // a later cycle than the first.
     RV_CHECK(m.reg(2) > m.reg(1));
+}
+
+RV_TEST(csr_trap, the_machine_counters_are_writable) {
+    // Unlike the user-mode shadows at 0xc00, mcycle is genuinely writable, and
+    // the write has to reach the hart's own counter -- otherwise the refresh
+    // before the next instruction would overwrite it and `csrw mcycle` would
+    // look like it worked while doing nothing.
+    Machine m;
+    m.load({
+        I(InstrId::ADDI, 1, 0, 100),
+        CSR(InstrId::CSRRW, 0, kMcycle, 1),  // mcycle = 100
+        CSR(InstrId::CSRRS, 2, kMcycle, 0),
+        EBREAK(),
+    });
+    m.run();
+    // 100 as written, plus one for the csrw itself retiring.
+    RV_CHECK_HEX(m.reg(2), 101u);
+}
+
+RV_TEST(csr_trap, the_machine_counters_read_the_same_values_as_their_shadows) {
+    // mcycle and cycle are two views of one counter, not two counters.
+    Machine m;
+    m.load({
+        CSR(InstrId::CSRRS, 1, kMcycle, 0),
+        CSR(InstrId::CSRRS, 2, kCycle, 0),
+        CSR(InstrId::CSRRS, 3, kMinstret, 0),
+        CSR(InstrId::CSRRS, 4, kInstret, 0),
+        EBREAK(),
+    });
+    m.run();
+    RV_CHECK_HEX(m.reg(2), m.reg(1) + 1u);  // one cycle apart
+    RV_CHECK_HEX(m.reg(4), m.reg(3) + 1u);  // one retirement apart
+}
+
+RV_TEST(csr_trap, writing_the_user_mode_counter_shadow_is_still_illegal) {
+    // Adding a writable mcycle must not make `cycle` writable by accident:
+    // read-only-ness is decided by the address bits, not by the pair.
+    Machine m;
+    m.load({
+        CSR(InstrId::CSRRW, 0, kCycle, 0),
+        EBREAK(),
+    });
+    const rv::core::StepOutcome outcome = m.step();
+    RV_CHECK(outcome.trapped);
+    RV_CHECK_EQ(static_cast<int>(outcome.cause), static_cast<int>(TrapCause::IllegalInstruction));
+}
+
+RV_TEST(csr_trap, misa_advertises_the_c_extension) {
+    // MXL=1 (RV32) in bits 31:30, then C (bit 2), I (bit 8) and M (bit 12).
+    Machine m;
+    m.load({
+        CSR(InstrId::CSRRS, 1, kMisa, 0),
+        EBREAK(),
+    });
+    m.run();
+    RV_CHECK_HEX(m.reg(1), 0x4000'1104u);
+    RV_CHECK_HEX(m.reg(1) & 0x4u, 0x4u);  // the C bit specifically
+}
+
+RV_TEST(csr_trap, mepc_can_hold_a_two_mod_four_address) {
+    // Before the C extension mepc's low two bits were held at zero. They cannot
+    // be any more: a compressed instruction can sit at 2 mod 4, and masking
+    // that bit off would resume a handler two bytes before the faulting
+    // instruction -- in the middle of the one before it.
+    Machine m;
+    m.load({EBREAK()});
+    m.hart().cpu().csr.write(kMepc, 0x0000'0006u);
+    RV_CHECK_HEX(read_csr(m, kMepc), 0x0000'0006u);
+    // Bit 0 is still held at zero: IALIGN is 16, not 8.
+    m.hart().cpu().csr.write(kMepc, 0x0000'0007u);
+    RV_CHECK_HEX(read_csr(m, kMepc), 0x0000'0006u);
+}
+
+RV_TEST(csr_trap, a_trap_from_a_compressed_instruction_records_its_own_address) {
+    // mepc must point at the compressed instruction that faulted, so a handler
+    // knows to advance it by 2 rather than 4 -- getting that wrong is what
+    // makes an ecall handler swallow the instruction after the ecall.
+    Machine m;
+    m.load({
+        // c.li a0, 1 at 0x00, then an ecall at 0x02 straddling the boundary.
+        0x0073'4505u,
+        0x0000'0000u,
+        EBREAK(),
+    });
+    poke_csr(m, kMtvec, 0x08);
+    m.step();                                        // c.li
+    const rv::core::StepOutcome outcome = m.step();  // ecall
+    RV_CHECK(outcome.trapped);
+    RV_CHECK_HEX(read_csr(m, kMepc), 0x02u);         // the ecall's own address
 }
 
 RV_TEST(csr_trap, accessing_an_unimplemented_csr_is_illegal) {

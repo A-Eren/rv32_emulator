@@ -65,7 +65,7 @@ int main(int argc, char** argv) {
     QApplication::setApplicationVersion("0.1.0");
 
     QCommandLineParser parser;
-    parser.setApplicationDescription("RV32IM_Zicsr emulator, assembler and debugger");
+    parser.setApplicationDescription("RV32IMC_Zicsr_Zifencei emulator, assembler and debugger");
     parser.addHelpOption();
     parser.addVersionOption();
     parser.addPositionalArgument("file", "assembly file to open", "[file.s]");

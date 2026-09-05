@@ -7,6 +7,7 @@
 // semantics under slti would compile, round-trip, and pass everything else.
 // This file closes that gap.
 #include "machine_fixture.hpp"
+#include "sample_operands.hpp"
 
 using namespace fixture;
 using rv::isa::InstrId;
@@ -17,27 +18,9 @@ namespace {
 
 /// Build a legal instance of `id` with operands chosen to be harmless: a rd
 /// nothing else reads, sources that are zero, and offsets that stay in range.
-rv::Word synthesize(InstrId id) {
-    const rv::isa::InstrDesc& desc = rv::isa::describe(id);
-    rv::isa::Operands operands;
-    operands.rd = 31;
-    operands.rs1 = 0;
-    operands.rs2 = 0;
-
-    switch (desc.syntax) {
-        case OperandSyntax::RD_CSR_RS1:
-        case OperandSyntax::RD_CSR_ZIMM:
-            operands.csr = 0x340;  // mscratch: writable and harmless
-            break;
-        case OperandSyntax::RD_OFS_RS1:
-        case OperandSyntax::RS2_OFS_RS1:
-            operands.imm = 0x40;  // inside data memory, word aligned
-            break;
-        default:
-            break;
-    }
-    return enc(id, operands);
-}
+/// The compressed rows accept none of those, so the choices live in
+/// sample_operands.hpp where the other table-walking tests share them.
+rv::Word synthesize(InstrId id) { return enc(id, sample::operands_for(id)); }
 
 }  // namespace
 
@@ -213,4 +196,32 @@ RV_TEST(exec_coverage, fence_retires_as_a_no_op) {
     RV_CHECK_HEX(m.reg(2), 9u);
     RV_CHECK_EQ(static_cast<int>(m.hart().halt_reason()),
                 static_cast<int>(rv::core::HaltReason::Ebreak));
+}
+
+RV_TEST(exec_coverage, fence_i_retires_as_a_no_op) {
+    // Zifencei. A no-op for a stronger reason than FENCE: this machine is
+    // Harvard, so a program cannot write the instruction stream it fetches
+    // from and there is never a stale fetch to flush. It still has to retire,
+    // because startup code written for a real toolchain contains one.
+    Machine m;
+    m.load({
+        I(InstrId::ADDI, 1, 0, 7),
+        enc(InstrId::FENCEI, {}),
+        I(InstrId::ADDI, 2, 0, 9),
+        EBREAK(),
+    });
+    m.run();
+    RV_CHECK_HEX(m.reg(1), 7u);
+    RV_CHECK_HEX(m.reg(2), 9u);
+    RV_CHECK_EQ(static_cast<int>(m.hart().halt_reason()),
+                static_cast<int>(rv::core::HaltReason::Ebreak));
+}
+
+RV_TEST(exec_coverage, fence_and_fence_i_are_distinct_encodings) {
+    // They differ only in funct3, and FENCE's mask covers it. A decoder that
+    // ignored funct3 here would silently accept one as the other.
+    RV_CHECK_HEX(enc(InstrId::FENCE, {}), 0x0000000fu);
+    RV_CHECK_HEX(enc(InstrId::FENCEI, {}), 0x0000100fu);
+    RV_CHECK_EQ(static_cast<int>(rv::isa::decode(0x0000100f).id),
+                static_cast<int>(InstrId::FENCEI));
 }

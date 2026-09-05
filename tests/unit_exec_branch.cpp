@@ -66,8 +66,9 @@ RV_TEST(exec_branch, jal_links_and_jumps) {
 
 RV_TEST(exec_branch, jalr_clears_the_low_bit_of_the_target) {
     // The spec requires the computed address to have its least significant bit
-    // cleared. Without that, an odd base makes the target misaligned and the
-    // jump faults instead of landing where the programmer meant.
+    // cleared. Without that, an odd base leaves the pc odd, which faults at
+    // IALIGN=16 just as it did at 32 -- clearing the bit is what makes
+    // `jalr rd, rs, offset` usable with a tagged pointer in rs.
     Machine m;
     m.load({
         I(InstrId::ADDI, 1, 0, 9),   // 0x00: x1 = 9 (odd)
@@ -96,14 +97,34 @@ RV_TEST(exec_branch, jalr_computes_the_target_before_linking) {
     RV_CHECK_HEX(m.reg(1), 0x08u);
 }
 
-RV_TEST(exec_branch, misaligned_jump_target_traps) {
+RV_TEST(exec_branch, a_target_two_past_a_word_boundary_is_legal) {
+    // This used to trap. With the C extension present IALIGN is 16 rather than
+    // 32, so a target of 2 mod 4 is an ordinary address -- it is where the
+    // second of two compressed instructions in a word lives.
     Machine m;
     m.load({
-        I(InstrId::ADDI, 1, 0, 6),   // not a multiple of 4
-        I(InstrId::JALR, 0, 1, 0),
-        EBREAK(),
+        I(InstrId::ADDI, 1, 0, 10),  // 0x00: x1 = 0x0a, which is 2 mod 4
+        I(InstrId::JALR, 0, 1, 0),   // 0x04: jump to 0x0a
+        I(InstrId::ADDI, 2, 0, 1),   // 0x08: the low half is skipped over...
+        EBREAK(),                    // 0x0c
     });
+    // 0x0a is the upper half of the word at 0x08. Put a c.li there, so landing
+    // mid-word finds a real instruction rather than the tail of another one.
+    m.hart().imem().write_word_raw(0x08, 0x4589'0093u);  // 0x0a: c.li a1, 2
     m.step();
+    const rv::core::StepOutcome outcome = m.step();
+    RV_CHECK(!outcome.trapped);
+    RV_CHECK_HEX(m.pc(), 0x0au);
+}
+
+RV_TEST(exec_branch, an_odd_pc_still_traps) {
+    // IALIGN is 16, not 8. Nothing a program can execute reaches an odd pc --
+    // jal and branch offsets are always even and jalr clears the low bit -- but
+    // a debugger can set one, and it must fault rather than fetch a byte-offset
+    // instruction.
+    Machine m;
+    m.load({EBREAK()});
+    m.hart().cpu().pc = 0x03;
     const rv::core::StepOutcome outcome = m.step();
     RV_CHECK(outcome.trapped);
     RV_CHECK_EQ(static_cast<int>(outcome.cause),

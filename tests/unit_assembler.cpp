@@ -489,3 +489,88 @@ RV_TEST(assembler, source_map_names_the_pseudo_a_word_came_from) {
     RV_CHECK(entry.has_value());
     RV_CHECK_EQ(static_cast<int>(entry->pseudo), static_cast<int>(PseudoId::LI));
 }
+
+// ---- the C extension -------------------------------------------------------
+
+RV_TEST(assembler, compressed_instructions_take_two_bytes) {
+    // Four compressed instructions pack into two words. If sizing still
+    // reserved four bytes each, this would be four words and every label after
+    // them would be wrong.
+    const AssembledProgram program = build_ok(
+        "        c.li a0, 1\n"
+        "        c.li a1, 2\n"
+        "        c.add a0, a1\n"
+        "        c.mv a2, a0\n");
+    RV_CHECK_EQ(program.imem_words.size(), std::size_t{2});
+    RV_CHECK_HEX(program.imem_words[0], 0x4589'4505u);
+    RV_CHECK_HEX(program.imem_words[1], 0x862a'952eu);
+}
+
+RV_TEST(assembler, a_32_bit_instruction_may_straddle_a_word_boundary) {
+    // One compressed instruction leaves the cursor at 2 mod 4, so the addi
+    // that follows spans two words. That is legal now, and the assembler must
+    // neither pad nor complain.
+    const AssembledProgram program = build_ok(
+        "        c.li a0, 1\n"
+        "        addi a1, zero, 0x123\n"
+        "        c.li a2, 3\n");
+    // 2 + 4 + 2 = 8 bytes.
+    RV_CHECK_EQ(program.imem_words.size(), std::size_t{2});
+    // addi a1, zero, 0x123 encodes as 0x12300593: its low half is in the first
+    // word and its high half in the second.
+    RV_CHECK_HEX(program.imem_words[0] & 0xffffu, 0x4505u);
+    RV_CHECK_HEX(program.imem_words[0] >> 16, 0x0593u);
+    RV_CHECK_HEX(program.imem_words[1] & 0xffffu, 0x1230u);
+}
+
+RV_TEST(assembler, labels_after_compressed_code_land_where_they_should) {
+    // The two passes have to agree about how many bytes each line takes. If
+    // they did not, this branch offset would be silently wrong rather than
+    // being reported -- which is why the sizing is a property of the mnemonic.
+    const AssembledProgram program = build_ok(
+        "        c.li a0, 1\n"
+        "        c.li a1, 2\n"
+        "        beq  a0, a1, target\n"
+        "        c.li a2, 3\n"
+        "target: ebreak\n");
+    const Symbol* target = program.symbols.find("target");
+    RV_CHECK(target != nullptr);
+    // 2 + 2 + 4 + 2 = 10.
+    RV_CHECK_HEX(target->value, 0x0au);
+}
+
+RV_TEST(assembler, a_compressed_form_rejects_a_register_it_cannot_reach) {
+    const AssembledProgram program = build("        c.lw t0, 8(a1)\n");
+    RV_CHECK(!program.ok());
+    RV_CHECK(has_code(program, "E0107"));
+}
+
+RV_TEST(assembler, a_compressed_form_rejects_an_out_of_range_immediate) {
+    RV_CHECK(has_code(build("        c.addi a0, 99\n"), "E0102"));
+    RV_CHECK(has_code(build("        c.lw a0, 6(a1)\n"), "E0102"));       // not a multiple of 4
+    RV_CHECK(has_code(build("        c.addi4spn a0, 0\n"), "E0102"));     // reserved
+    RV_CHECK(has_code(build("        c.addi16sp 8\n"), "E0102"));         // not a multiple of 16
+}
+
+RV_TEST(assembler, the_sp_forms_insist_on_sp) {
+    RV_CHECK(has_code(build("        c.swsp a0, 4(a1)\n"), "E0109"));
+    RV_CHECK(has_code(build("        c.lwsp a0, 4(a1)\n"), "E0109"));
+    RV_CHECK(build_ok("        c.swsp a0, 4(sp)\n").ok());
+}
+
+RV_TEST(assembler, the_forms_that_exclude_x0_say_so) {
+    RV_CHECK(has_code(build("        c.jr zero\n"), "E0108"));
+    RV_CHECK(has_code(build("        c.mv zero, a0\n"), "E0108"));
+}
+
+RV_TEST(assembler, compressed_code_round_trips_through_the_disassembler) {
+    // What the assembler emits, the disassembler must name the same way -- and
+    // it must name it as the compressed form, not as what it expands to.
+    const AssembledProgram program = build_ok(
+        "        c.li a0, 5\n"
+        "        c.addi a0, -1\n"
+        "        c.jr ra\n");
+    RV_CHECK_STR(isa::disassemble_word(program.imem_words[0] & 0xffffu, 0), "c.li a0, 5");
+    RV_CHECK_STR(isa::disassemble_word(program.imem_words[0] >> 16, 2), "c.addi a0, -1");
+    RV_CHECK_STR(isa::disassemble_word(program.imem_words[1] & 0xffffu, 4), "c.jr ra");
+}

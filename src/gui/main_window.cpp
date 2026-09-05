@@ -376,7 +376,7 @@ void MainWindow::assemble() {
     editor_->set_symbols(&session_->symbols());
     encoding_->follow_pc();
     set_message(QString::asprintf("assembled: %zu instructions, %zu bytes of data",
-                                  session_->program().imem_words.size(),
+                                  session_->program().map.entries().size(),
                                   session_->program().dmem_bytes.size()));
     refresh_all();
 }
@@ -558,10 +558,12 @@ void MainWindow::refresh_overflow() {
 
     QString reason;
     if (code_overflows) {
-        reason = QString("%1 instructions past the end of imem (%2 KB holds %3)")
-                     .arg(program.imem_words.size() - imem_bytes / 4)
-                     .arg(imem_bytes / 1024)
-                     .arg(imem_bytes / 4);
+        // Bytes rather than instructions: with the C extension "how many
+        // instructions too many" depends on how many of them are compressed,
+        // so it is not a number that can be stated.
+        reason = QString("%1 bytes of code past the end of imem (%2 KB)")
+                     .arg(program.imem_bytes - imem_bytes)
+                     .arg(imem_bytes / 1024);
     }
     if (data_overflows) {
         if (!reason.isEmpty()) reason += "; ";

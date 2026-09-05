@@ -43,7 +43,7 @@ struct ExecResult {
     Addr mem_written = kNoAddr;
     u8 mem_width = 0;
     /// The target device's aux state before the write, if it was a device.
-    u32 device_aux_before = 0;
+    u64 device_aux_before = 0;
     /// The whole pre-image word at the aligned address. Storing the full word
     /// rather than just the changed bytes makes undoing an sb or sh trivially
     /// correct, with no byte-mask bookkeeping.

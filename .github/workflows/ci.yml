@@ -100,7 +100,7 @@ jobs:
       - name: Build
         run: cmake --build build/release
 
-      # No release test preset, so name the directory instead. Same 23 tests
+      # No release test preset, so name the directory instead. Same 25 tests
       # the Linux job runs, the GUI one included.
       - name: Test
         run: ctest --test-dir build/release --output-on-failure
@@ -156,7 +156,7 @@ jobs:
           done
 
           cat > dist/HOW-TO-RUN.txt <<'TXT'
-          rv32 -- an RV32IM_Zicsr emulator, assembler and debugger.
+          rv32 -- an RV32IMC_Zicsr_Zifencei emulator, assembler and debugger.
 
           Double-click rv32-gui.exe for the desktop window: write assembly,
           press F5 to assemble, F8 to step. Open examples\fib.s to start.

@@ -55,6 +55,13 @@ u32 Memory::read_word_raw(Addr addr) const {
            (static_cast<u32>(bytes_[offset + 3]) << 24);
 }
 
+u16 Memory::read_half_raw(Addr addr) const {
+    if (!contains(addr) || !contains(addr + 1u)) return 0;
+    const u32 offset = addr - base_;
+    return static_cast<u16>(static_cast<u32>(bytes_[offset]) |
+                            (static_cast<u32>(bytes_[offset + 1]) << 8));
+}
+
 void Memory::write_word_raw(Addr addr, u32 value) {
     if (!contains(addr) || !contains(addr + 3u)) return;
     const u32 offset = addr - base_;

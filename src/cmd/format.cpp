@@ -15,6 +15,18 @@ std::string hex32(u32 value) {
     return buffer;
 }
 
+/// An instruction word at the width it actually occupies, right-aligned in the
+/// same eight columns so a mixed listing stays in line.
+std::string hex_instr(u32 value, u8 length) {
+    char buffer[16];
+    if (length == 2) {
+        std::snprintf(buffer, sizeof buffer, "    %04x", value & 0xffffu);
+    } else {
+        std::snprintf(buffer, sizeof buffer, "%08x", value);
+    }
+    return buffer;
+}
+
 bool changed_recently(const dbg::DebugSession& session, RegIdx reg) {
     for (const dbg::RegChange& change : session.last_changes()) {
         if (change.index == reg) return true;
@@ -106,9 +118,11 @@ std::string format_disassembly(const dbg::DebugSession& session, Addr addr, u32 
     const Addr pc = session.cpu().pc;
     u32 last_line = 0;
 
-    for (u32 index = 0; index < count; ++index) {
-        const Addr at = addr + index * 4;
-        const Word word = session.read_imem_word(at);
+    // Instructions are a halfword stream, so the listing cannot stride: each one
+    // has to be decoded to learn how far the next one starts.
+    Addr at = addr;
+    for (u32 index = 0; index < count; ++index, at += session.instr_length_at(at)) {
+        const Word word = session.read_imem_instr(at);
         const auto entry = session.map().at(at);
 
         // Print the source line above the first instruction it produced, so a
@@ -131,7 +145,8 @@ std::string format_disassembly(const dbg::DebugSession& session, Addr addr, u32 
 
         char line[256];
         std::snprintf(line, sizeof line, "  %c%s %s  %s  %s", has_breakpoint ? 'B' : ' ',
-                      at == pc ? ">" : " ", hex32(at).c_str(), hex32(word).c_str(),
+                      at == pc ? ">" : " ", hex32(at).c_str(),
+                      hex_instr(word, session.instr_length_at(at)).c_str(),
                       continuation ? "  " : "");
         out << line << isa::disassemble_word(word, at, disasm_options(options)) << "\n";
     }
@@ -157,7 +172,10 @@ std::string format_source(const dbg::DebugSession& session, u32 line, u32 radius
 
 std::string format_location(const dbg::DebugSession& session, const FormatOptions& options) {
     const Addr pc = session.cpu().pc;
-    const Word word = session.read_imem_word(pc);
+    // Fetch the way the hart does. A plain word read happens to disassemble a
+    // compressed instruction correctly -- decode() ignores the upper half --
+    // but it returns 0 for one sitting in the last halfword of imem.
+    const Word word = session.read_imem_instr(pc);
     std::ostringstream out;
 
     out << "=> " << hex32(pc) << "  " << isa::disassemble_word(word, pc, disasm_options(options));

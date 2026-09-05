@@ -98,3 +98,87 @@ RV_TEST(fields, register_field_positions) {
     RV_CHECK_EQ(rs1_of(word), 2);
     RV_CHECK_EQ(rs2_of(word), 3);
 }
+
+// ---- compressed (C extension) fields ---------------------------------------
+
+RV_TEST(fields, compressed_register_fields) {
+    // The 3-bit fields address x8-x15 only. Zero means x8, not x0 -- getting
+    // that bias wrong would silently turn every c.lw into a load from the wrong
+    // register rather than into anything that looks like an error.
+    RV_CHECK_EQ(creg(0), 8);
+    RV_CHECK_EQ(creg(7), 15);
+
+    const Word word = put_crs1p(9) | put_crs2p(14);
+    RV_CHECK_EQ(crs1p_of(word), 9);
+    RV_CHECK_EQ(crs2p_of(word), 14);
+
+    const Word full = put_crd(31) | put_crs2(17);
+    RV_CHECK_EQ(crd_of(full), 31);
+    RV_CHECK_EQ(crs2_of(full), 17);
+}
+
+RV_TEST(fields, compressed_immediate_round_trip) {
+    // Exhaustive rather than sampled: every one of these fields is small enough
+    // to enumerate completely, so there is no reason to settle for random
+    // coverage of a scatter this easy to get wrong.
+    for (i32 imm = -32; imm <= 31; ++imm) {
+        RV_CHECK_EQ(c_imm_ci(put_c_imm_ci(imm)), imm);
+    }
+    for (u32 shamt = 0; shamt < 64; ++shamt) {
+        RV_CHECK_HEX(c_shamt(put_c_shamt(shamt)), shamt);
+    }
+    // c.lui carries its value already positioned at bits 17:12.
+    for (i32 raw = -32; raw <= 31; ++raw) {
+        const i32 imm = static_cast<i32>(static_cast<u32>(raw) << 12);
+        RV_CHECK_EQ(c_imm_lui(put_c_imm_lui(imm)), imm);
+    }
+    // c.addi16sp: signed, a multiple of 16, -512..496.
+    for (i32 imm = -512; imm <= 496; imm += 16) {
+        RV_CHECK_EQ(c_imm_addi16sp(put_c_imm_addi16sp(imm)), imm);
+    }
+    // c.addi4spn: unsigned, a multiple of 4, 0..1020.
+    for (u32 imm = 0; imm <= 1020; imm += 4) {
+        RV_CHECK_HEX(c_imm_addi4spn(put_c_imm_addi4spn(imm)), imm);
+    }
+    // Three different layouts for the same quantity -- a word offset.
+    for (u32 imm = 0; imm <= 124; imm += 4) {
+        RV_CHECK_HEX(c_imm_lw(put_c_imm_lw(imm)), imm);
+    }
+    for (u32 imm = 0; imm <= 252; imm += 4) {
+        RV_CHECK_HEX(c_imm_lwsp(put_c_imm_lwsp(imm)), imm);
+        RV_CHECK_HEX(c_imm_swsp(put_c_imm_swsp(imm)), imm);
+    }
+    // c.j / c.jal: signed, even, +-2 KB.
+    for (i32 imm = -2048; imm <= 2046; imm += 2) {
+        RV_CHECK_EQ(c_imm_cj(put_c_imm_cj(imm)), imm);
+    }
+    // c.beqz / c.bnez: signed, even, +-256 B.
+    for (i32 imm = -256; imm <= 254; imm += 2) {
+        RV_CHECK_EQ(c_imm_cb(put_c_imm_cb(imm)), imm);
+    }
+}
+
+RV_TEST(fields, compressed_immediates_stay_inside_16_bits) {
+    // A compressed inserter that spilled a bit above bit 15 would corrupt the
+    // *next* instruction in the halfword stream, which is a far nastier failure
+    // than a wrong operand.
+    constexpr Word kHalf = 0xffff'0000u;
+    RV_CHECK_HEX(put_c_imm_ci(-1) & kHalf, 0u);
+    RV_CHECK_HEX(put_c_shamt(63) & kHalf, 0u);
+    RV_CHECK_HEX(put_c_imm_lui(-4096) & kHalf, 0u);
+    RV_CHECK_HEX(put_c_imm_addi16sp(-16) & kHalf, 0u);
+    RV_CHECK_HEX(put_c_imm_addi4spn(1020) & kHalf, 0u);
+    RV_CHECK_HEX(put_c_imm_lw(124) & kHalf, 0u);
+    RV_CHECK_HEX(put_c_imm_lwsp(252) & kHalf, 0u);
+    RV_CHECK_HEX(put_c_imm_swsp(252) & kHalf, 0u);
+    RV_CHECK_HEX(put_c_imm_cj(-2) & kHalf, 0u);
+    RV_CHECK_HEX(put_c_imm_cb(-2) & kHalf, 0u);
+    RV_CHECK_HEX(put_crd(31) & kHalf, 0u);
+    RV_CHECK_HEX(put_crs2(31) & kHalf, 0u);
+
+    // The op[1:0] slot belongs to the quadrant, never to an immediate.
+    RV_CHECK_HEX(put_c_imm_ci(-1) & 3u, 0u);
+    RV_CHECK_HEX(put_c_imm_cj(-2) & 3u, 0u);
+    RV_CHECK_HEX(put_c_imm_cb(-2) & 3u, 0u);
+    RV_CHECK_HEX(put_c_imm_lwsp(252) & 3u, 0u);
+}

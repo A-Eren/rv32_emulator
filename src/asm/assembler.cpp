@@ -8,6 +8,7 @@
 #include "core/memfile.hpp"
 #include "isa/csr.hpp"
 #include "isa/encode.hpp"
+#include "isa/expand.hpp"
 #include "isa/regnames.hpp"
 
 namespace rv::as {
@@ -102,11 +103,14 @@ private:
     bool want_value(const AsmLine& line, std::size_t index, i64& out, Space& space);
     bool want_memory(const AsmLine& line, std::size_t index, RegIdx& base, i64& offset);
     bool want_csr(const AsmLine& line, std::size_t index, CsrAddr& out);
+    bool want_compressible_register(const AsmLine& line, std::size_t index, RegIdx& out);
+    bool want_nonzero_register(const AsmLine& line, std::size_t index, RegIdx& out);
     /// A branch or jump target: must resolve into the text space.
     bool want_code_target(const AsmLine& line, std::size_t index, Addr& target);
 
     // ---- emission ---------------------------------------------------------
-    void emit(InstrId id, const isa::Operands& operands, SourceSpan span);
+    void emit(InstrId id, const isa::Operands& operands, SourceSpan span,
+              SourceSpan value_span = SourceSpan{});
     void begin_line(const AsmLine& line);
     void encode_instruction(const AsmLine& line);
     void encode_pseudo(const AsmLine& line);
@@ -377,6 +381,31 @@ bool Assembler::want_memory(const AsmLine& line, std::size_t index, RegIdx& base
     return false;
 }
 
+bool Assembler::want_compressible_register(const AsmLine& line, std::size_t index, RegIdx& out) {
+    if (!want_register(line, index, out)) return false;
+    if (isa::is_compressible_reg(out)) return true;
+    // The single most common way to be surprised by the C extension, so it gets
+    // a diagnostic under the offending operand rather than under the mnemonic,
+    // and names the way out.
+    error("E0107",
+          "'" + std::string(line.mnemonic) + "' cannot reach " +
+              std::string(isa::abi_name(out)),
+          line.operands[index].span, "not one of the eight compressed registers",
+          "this form encodes its registers in 3 bits, so it can only use " +
+              std::string(isa::kCompressibleRegList) +
+              "; use the 32-bit form for anything else");
+    return false;
+}
+
+bool Assembler::want_nonzero_register(const AsmLine& line, std::size_t index, RegIdx& out) {
+    if (!want_register(line, index, out)) return false;
+    if (out != 0) return true;
+    error("E0108", "'" + std::string(line.mnemonic) + "' cannot use zero",
+          line.operands[index].span, "this operand may not be x0",
+          "the encoding uses x0 in this slot to mean a different instruction");
+    return false;
+}
+
 bool Assembler::want_csr(const AsmLine& line, std::size_t index, CsrAddr& out) {
     i64 value = 0;
     Space space = Space::Absolute;
@@ -430,16 +459,18 @@ bool Assembler::want_code_target(const AsmLine& line, std::size_t index, Addr& t
 // Emission
 // ---------------------------------------------------------------------------
 
-void Assembler::emit(InstrId id, const isa::Operands& operands, SourceSpan span) {
+void Assembler::emit(InstrId id, const isa::Operands& operands, SourceSpan span,
+                     SourceSpan value_span) {
     if (space_ != Space::Text) {
         error("E0401", "instructions can only appear in .text", span,
               "this is inside .data");
         return;
     }
-    if ((text_.cursor & 3u) != 0) {
-        error("E0402", "instruction is not word-aligned", span,
+    // Instructions are a halfword stream now, so only an odd cursor is wrong.
+    if ((text_.cursor & 1u) != 0) {
+        error("E0402", "instruction is not halfword-aligned", span,
               "address 0x" + std::to_string(text_.cursor),
-              "a preceding .byte or .space left the cursor misaligned; add '.align 2'");
+              "a preceding .byte or .space left the cursor misaligned; add '.align 1'");
         return;
     }
 
@@ -451,23 +482,60 @@ void Assembler::emit(InstrId id, const isa::Operands& operands, SourceSpan span)
             label = std::string(encoded.field) + " " + std::to_string(encoded.value) +
                     " is out of range";
             hint = "must be in " + std::to_string(encoded.min) + ".." + std::to_string(encoded.max);
-            if (std::string(encoded.field) == "immediate") {
+            const bool compressed = isa::is_compressed_format(isa::describe(id).format);
+            if (compressed) {
+                // The 32-bit form of the same operation is the answer, and it
+                // is one word away -- much better advice than spilling to a
+                // register. Asking expand() for the name rather than stripping
+                // the "c." prefix keeps the suggestion honest: c.swsp becomes
+                // sw and c.addi4spn becomes addi, neither of which is spelled
+                // anything like its compressed form.
+                isa::DecodedInstr probe;
+                probe.id = id;
+                const std::string_view base = isa::mnemonic_of(isa::expand(probe).id);
+                hint += "; the 32-bit '" + std::string(base) + "' has room for it";
+            } else if (std::string(encoded.field) == "immediate") {
                 hint += "; load it first with 'li t0, " + std::to_string(encoded.value) +
                         "' and use a register";
             } else {
                 hint += "; the target is too far away for this instruction";
             }
+        } else if (encoded.error == isa::EncodeError::ImmediateMisaligned && encoded.min > 1) {
+            // Compressed offsets are scaled, so the encoding simply has no bit
+            // for the low ones. Saying which multiple is required is far more
+            // use than "misaligned".
+            label = std::string(encoded.field) + " " + std::to_string(encoded.value) +
+                    " is not a multiple of " + std::to_string(encoded.min);
+            hint = "this form scales its offset by " + std::to_string(encoded.min) +
+                   ", so it cannot encode the low bits";
+        } else if (encoded.error == isa::EncodeError::ImmediateMustNotBeZero) {
+            label = std::string(encoded.field) + " cannot be zero in this form";
+            hint = "that encoding is reserved; use the 32-bit form if you need it";
+        } else if (encoded.error == isa::EncodeError::RegisterNotCompressible) {
+            label = "register not reachable from this form";
+            hint = "compressed forms can only use " + std::string(isa::kCompressibleRegList);
         }
+        // An error about a value belongs under the value, not under the
+        // mnemonic -- which matters much more for compressed instructions,
+        // where a range can be as narrow as 0..124.
+        const bool about_value = encoded.error != isa::EncodeError::RegisterOutOfRange &&
+                                 encoded.error != isa::EncodeError::RegisterNotCompressible &&
+                                 encoded.error != isa::EncodeError::RegisterMustNotBeZero;
         error("E0102",
-              std::string("cannot encode '") + std::string(isa::mnemonic_of(id)) + "'", span,
-              std::move(label), std::move(hint));
+              std::string("cannot encode '") + std::string(isa::mnemonic_of(id)) + "'",
+              about_value && value_span.valid() ? value_span : span, std::move(label),
+              std::move(hint));
         return;
     }
 
     out_.map.add(AddrEntry{text_.cursor, current_line_, current_slot_, current_count_,
                            current_pseudo_});
     ++current_slot_;
-    text_.emit_word(encoded.word);
+    if (encoded.size_bytes == 2) {
+        text_.emit_half(static_cast<u16>(encoded.word));
+    } else {
+        text_.emit_word(encoded.word);
+    }
 }
 
 void Assembler::begin_line(const AsmLine& line) {
@@ -483,6 +551,10 @@ void Assembler::encode_instruction(const AsmLine& line) {
     isa::Operands operands;
     i64 value = 0;
     Space space = Space::Absolute;
+    // Where to point an encoding error that is about a value rather than the
+    // instruction as a whole. Compressed immediates have tight enough ranges
+    // that underlining the mnemonic is not good enough.
+    SourceSpan value_span{};
 
     switch (desc.syntax) {
         case isa::OperandSyntax::NONE:
@@ -593,9 +665,154 @@ void Assembler::encode_instruction(const AsmLine& line) {
             if (!want_value(line, 2, value, space)) return;
             operands.imm = static_cast<i32>(value);
             break;
+
+        // ---- compressed ----------------------------------------------------
+        // These bind operands exactly like their 32-bit counterparts; what
+        // differs is that a register can be rejected for being the wrong
+        // register rather than for not being one. The range checks stay in
+        // isa/encode.cpp with the bit layouts they belong to -- `value_span`
+        // below is what lets those errors still point at the right operand.
+        case isa::OperandSyntax::C_RD_IMM:
+        case isa::OperandSyntax::C_RD_SHAMT:
+            // x0 here encodes a HINT rather than an error, but writing one is
+            // almost always a mistake, so the assembler refuses even though the
+            // encoder would not. Disassembly of a HINT still round-trips,
+            // because that path does not come through here.
+            if (!expect_operand_count(line, 2)) return;
+            if (!want_nonzero_register(line, 0, operands.rd)) return;
+            if (!want_value(line, 1, value, space)) return;
+            operands.imm = static_cast<i32>(value);
+            value_span = line.operands[1].span;
+            break;
+
+        case isa::OperandSyntax::C_RD_UIMM:
+            if (!expect_operand_count(line, 2)) return;
+            if (!want_nonzero_register(line, 0, operands.rd)) return;
+            if (!want_value(line, 1, value, space)) return;
+            // Written as the upper bits, like lui.
+            operands.imm = static_cast<i32>(static_cast<u32>(value) << 12);
+            value_span = line.operands[1].span;
+            break;
+
+        case isa::OperandSyntax::C_RDP_IMM:
+        case isa::OperandSyntax::C_RDP_SHAMT:
+        case isa::OperandSyntax::C_RDP_UIMM:
+            if (!expect_operand_count(line, 2)) return;
+            if (!want_compressible_register(line, 0, operands.rd)) return;
+            if (!want_value(line, 1, value, space)) return;
+            operands.imm = static_cast<i32>(value);
+            value_span = line.operands[1].span;
+            break;
+
+        case isa::OperandSyntax::C_RD_RS2:
+            if (!expect_operand_count(line, 2)) return;
+            if (!want_nonzero_register(line, 0, operands.rd)) return;
+            if (!want_nonzero_register(line, 1, operands.rs2)) return;
+            break;
+
+        case isa::OperandSyntax::C_RDP_RS2P:
+            if (!expect_operand_count(line, 2)) return;
+            if (!want_compressible_register(line, 0, operands.rd)) return;
+            if (!want_compressible_register(line, 1, operands.rs2)) return;
+            break;
+
+        case isa::OperandSyntax::C_RS1:
+            if (!expect_operand_count(line, 1)) return;
+            if (!want_nonzero_register(line, 0, operands.rs1)) return;
+            break;
+
+        case isa::OperandSyntax::C_IMM:
+            if (!expect_operand_count(line, 1)) return;
+            if (!want_value(line, 0, value, space)) return;
+            operands.imm = static_cast<i32>(value);
+            value_span = line.operands[0].span;
+            break;
+
+        case isa::OperandSyntax::C_LBL: {
+            if (!expect_operand_count(line, 1)) return;
+            Addr target = 0;
+            if (!want_code_target(line, 0, target)) return;
+            operands.imm = static_cast<i32>(target) - static_cast<i32>(text_.cursor);
+            value_span = line.operands[0].span;
+            break;
+        }
+
+        case isa::OperandSyntax::C_RS1P_LBL: {
+            if (!expect_operand_count(line, 2)) return;
+            if (!want_compressible_register(line, 0, operands.rs1)) return;
+            Addr target = 0;
+            if (!want_code_target(line, 1, target)) return;
+            operands.imm = static_cast<i32>(target) - static_cast<i32>(text_.cursor);
+            value_span = line.operands[1].span;
+            break;
+        }
+
+        case isa::OperandSyntax::C_RDP_OFS_RS1P: {
+            if (!expect_operand_count(line, 2)) return;
+            if (!want_compressible_register(line, 0, operands.rd)) return;
+            i64 offset = 0;
+            if (!want_memory(line, 1, operands.rs1, offset)) return;
+            if (!isa::is_compressible_reg(operands.rs1)) {
+                error("E0107",
+                      "'" + std::string(line.mnemonic) + "' cannot reach " +
+                          std::string(isa::abi_name(operands.rs1)) + " as a base",
+                      line.operands[1].span, "not one of the eight compressed registers",
+                      "this form encodes its base register in 3 bits, so it can only use " +
+                          std::string(isa::kCompressibleRegList) + "; use 'lw' instead");
+                return;
+            }
+            operands.imm = static_cast<i32>(offset);
+            value_span = line.operands[1].span;
+            break;
+        }
+
+        case isa::OperandSyntax::C_RS2P_OFS_RS1P: {
+            if (!expect_operand_count(line, 2)) return;
+            if (!want_compressible_register(line, 0, operands.rs2)) return;
+            i64 offset = 0;
+            if (!want_memory(line, 1, operands.rs1, offset)) return;
+            if (!isa::is_compressible_reg(operands.rs1)) {
+                error("E0107",
+                      "'" + std::string(line.mnemonic) + "' cannot reach " +
+                          std::string(isa::abi_name(operands.rs1)) + " as a base",
+                      line.operands[1].span, "not one of the eight compressed registers",
+                      "this form encodes its base register in 3 bits, so it can only use " +
+                          std::string(isa::kCompressibleRegList) + "; use 'sw' instead");
+                return;
+            }
+            operands.imm = static_cast<i32>(offset);
+            value_span = line.operands[1].span;
+            break;
+        }
+
+        case isa::OperandSyntax::C_RD_OFS_SP:
+        case isa::OperandSyntax::C_RS2_OFS_SP: {
+            if (!expect_operand_count(line, 2)) return;
+            const bool is_load = desc.syntax == isa::OperandSyntax::C_RD_OFS_SP;
+            if (is_load) {
+                if (!want_nonzero_register(line, 0, operands.rd)) return;
+            } else {
+                if (!want_register(line, 0, operands.rs2)) return;
+            }
+            i64 offset = 0;
+            RegIdx base = 0;
+            if (!want_memory(line, 1, base, offset)) return;
+            if (base != 2) {
+                error("E0109",
+                      "'" + std::string(line.mnemonic) + "' always addresses through sp",
+                      line.operands[1].span,
+                      "base is " + std::string(isa::abi_name(base)) + ", not sp",
+                      "the stack pointer is implied by the encoding; write it as 'sp'");
+                return;
+            }
+            operands.rs1 = base;
+            operands.imm = static_cast<i32>(offset);
+            value_span = line.operands[1].span;
+            break;
+        }
     }
 
-    emit(line.instr, operands, line.mnemonic_span);
+    emit(line.instr, operands, line.mnemonic_span, value_span);
 }
 
 void Assembler::encode_pseudo(const AsmLine& line) {
@@ -1115,8 +1332,17 @@ void Assembler::pass_layout() {
                 if (space_ == Space::Text) section().skip(4);
                 break;
             case AsmLine::Kind::Instruction:
+                // `words` stays an instruction count -- it feeds the debugger's
+                // "[1/2]" slot display -- while the cursor advances by the real
+                // encoded width, which is 2 for a compressed row.
+                //
+                // This is only safe because the assembler never compresses on
+                // its own: the width is a property of the mnemonic, known here
+                // in pass 1, so pass 2 cannot disagree. An automatic-compression
+                // mode would have to make that choice here too, never in
+                // pass_encode(), or every address after it would silently shift.
                 line.words = 1;
-                section().skip(4);
+                section().skip(isa::describe(line.instr).length());
                 break;
             case AsmLine::Kind::Pseudo: {
                 u8 words = describe_pseudo(line.pseudo).words;
@@ -1189,6 +1415,7 @@ void Assembler::run() {
               SourceSpan{});
     }
 
+    out_.imem_bytes = text_.bytes.size();
     out_.imem_words = core::pack_bytes_to_words(text_.bytes);
     out_.dmem_bytes = data_.bytes;
 }

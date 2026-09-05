@@ -2,7 +2,7 @@
 Type=Application
 Name=rv32
 GenericName=RISC-V Emulator
-Comment=RV32IM_Zicsr emulator, assembler and debugger
+Comment=RV32IMC_Zicsr_Zifencei emulator, assembler and debugger
 Exec=rv32-gui %f
 Icon=rv32
 Terminal=false

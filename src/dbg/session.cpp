@@ -85,9 +85,18 @@ bool DebugSession::is_call(const core::StepOutcome& outcome) const {
     // A jump that keeps its link register is a call; one that discards it is a
     // plain jump. That is the only signal available, and it is the right one.
     if (!outcome.instr.valid()) return false;
-    const isa::InstrId id = outcome.instr.id;
-    if (id != isa::InstrId::JAL && id != isa::InstrId::JALR) return false;
-    return outcome.instr.rd != 0;
+    switch (outcome.instr.id) {
+        case isa::InstrId::JAL:
+        case isa::InstrId::JALR:
+            return outcome.instr.rd != 0;
+        // c.jal and c.jalr link to ra implicitly, so there is no rd field to
+        // test -- they are always calls. c.j and c.jr link to x0 and never are.
+        case isa::InstrId::C_JAL:
+        case isa::InstrId::C_JALR:
+            return true;
+        default:
+            return false;
+    }
 }
 
 StopEvent DebugSession::step_instruction() {
@@ -170,7 +179,10 @@ StopEvent DebugSession::step(StepKind kind) {
         if (event.reason != StopReason::Step) return event;
 
         if (kind == StepKind::LineOver && is_call(last_step_)) {
-            const Addr return_addr = last_step_.pc_before + 4;
+            // Past the call, which is 2 bytes if it was a compressed one.
+            // run_until_return compares the pc for exact equality, so an
+            // off-by-two here does not fail loudly -- it runs to the watchdog.
+            const Addr return_addr = last_step_.pc_before + last_step_.instr.length;
             StopEvent inner = run_until_return(return_addr, sp_at_start);
             if (inner.reason != StopReason::Step) return inner;
         }
