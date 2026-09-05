@@ -85,16 +85,30 @@ public:
     /// Write without side effects, for undo and for editing memory by hand.
     virtual void poke(u32 /*offset*/, u32 /*value*/) {}
 
-    /// State that peek/poke cannot express -- the UART's output length is the
-    /// only such thing so far. Captured before every step that writes to this
-    /// device, so reverse stepping can put it back.
-    virtual u32 aux_state() const { return 0; }
-    virtual void set_aux_state(u32 /*value*/) {}
+    /// State that peek/poke cannot express -- a UART's output length, a
+    /// peripheral's start cycle and last result. Captured before every step
+    /// that writes to this device, so reverse stepping can put it back. One
+    /// field rather than a snapshot interface, because that is all any device
+    /// has needed: everything else a write changes is a register, and registers
+    /// are covered by the ordinary one-word memory delta.
+    virtual u64 aux_state() const { return 0; }
+    virtual void set_aux_state(u64 /*value*/) {}
+
+    // ---- time ----------------------------------------------------------------
+
+    /// What the machine's clock reads, pushed whenever it moves -- including
+    /// backwards, when a step is undone. A device whose registers change with
+    /// time reads this rather than counting for itself, so that its state stays
+    /// a function of the cycle counter and reverse stepping restores it for
+    /// free. See docs/memory-map.md for what the clock counts.
+    virtual void set_now(u64 /*now*/) {}
 
     // ---- interrupts ---------------------------------------------------------
 
     /// The mip bits this device is asserting. `now` is the cycle counter, which
-    /// is this machine's clock -- see docs/memory-map.md for why.
+    /// is this machine's clock -- see docs/memory-map.md for why. Passed rather
+    /// than read from set_now, because nothing may be stored for it: a stored
+    /// pending bit is one that survives an undo.
     virtual u32 interrupt_lines(u64 /*now*/) const { return 0; }
 
     // ---- the user interface -------------------------------------------------

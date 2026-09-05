@@ -146,9 +146,11 @@ private:
                 size_->addItem(QString("%1 %2").arg(value).arg(units),
                                QVariant(static_cast<uint>(value)));
             }
-            // The largest width, or a middling block -- a 32-bit register and
-            // a 256-byte block are what someone means when they do not say.
-            size_->setCurrentIndex(unit == core::SizeUnit::Bytes ? 2 : size_->count() - 1);
+            // What someone means by a device of this kind when they do not
+            // say. The catalogue names it, so the list can grow without the
+            // opening choice quietly moving with it.
+            const int at = size_->findData(QVariant(static_cast<uint>(core::default_size(unit))));
+            size_->setCurrentIndex(at >= 0 ? at : size_->count() - 1);
         }
 
         name_->setPlaceholderText(named ? "what this peripheral is called"

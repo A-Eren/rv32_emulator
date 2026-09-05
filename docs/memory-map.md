@@ -71,7 +71,7 @@ The default machine, if nothing says otherwise:
 | 0 | `0xFFFF0000` | `uart` | `+0` W transmit a byte; `+4` R status, bit 0 = ready |
 | 1 | `0xFFFF0010` | `leds` | 32-bit output register |
 | 2 | `0xFFFF0020` | `switches` | 32-bit input register |
-| 3 | `0xFFFF0030` | `mtime` | cycle counter, low and high words |
+| 3 | `0xFFFF0030` | `mtime` | the clock, low and high words; one tick per instruction |
 | 4 | `0xFFFF0040` | `mtimecmp` | timer compare; an interrupt is pending while `mtime >= mtimecmp` |
 | 5 | `0xFFFF0050` | `irq` | `+0` software request, `+4` external request |
 
@@ -85,6 +85,7 @@ And the types that can be added:
 | `ram` | a memory block, optionally preloaded with `load` | bytes |
 | `rom` | the same, but stores from the program are ignored | bytes |
 | `custom` | your own: a `name`, registers the program can read and write, each settable by hand, and a line it can raise an interrupt on | registers |
+| `function` | a peripheral that **computes**: operands in, a result out, after a latency | bits per operand |
 
 `leds` and `switches` are sized in bits too. Every size is chosen from a list of
 powers of two, for the same reason the memory sizes are: this is hardware, and a
@@ -143,6 +144,71 @@ is what an exercise reaches for when the peripheral it needs is not in the
 list — and being able to raise an interrupt means a student can build the
 source of one, not only handle one that was provided.
 
+### A peripheral that computes
+
+`custom` is a register file: it hands back what it was written. An IP core is
+not that. Its output is a *function* of its input, and it takes time to produce
+one, and that timing is most of what driving a peripheral is about. `function`
+is that shape.
+
+```toml
+[[device]]
+type = "function"
+name = "multiplier"
+address = 0xffff0060
+operation = "mul"       # the behaviour, from the list below
+size = 8                # bits per operand
+latency = 7             # cycles it reports busy before the result is ready
+```
+
+| Offset | | |
+|---|---|---|
+| `+0x00` | `A` | RW — operand |
+| `+0x04` | `B` | RW — operand |
+| `+0x08` | `P` low | R — the latched result, low half |
+| `+0x0c` | `P` high | R — the latched result, high half |
+| `+0x10` | status | R — `0` idle, `1` busy, `2` done |
+
+Five registers a word apart do not fit in one sixteen-byte slot, so a function
+device takes two.
+
+The protocol is the one the course's IP homework specifies:
+
+```
+write A, write B    the write is what starts it
+poll status         until it reads done -- reads only
+read P low, P high  the result, as two halves
+```
+
+Three parts of it are worth stating, because a program that gets them wrong
+gets them wrong on the board in the same way:
+
+- **Any write restarts the operation**, whichever register it names — a store to
+  the read-only status register restarts it too, and loads nothing. So the poll
+  loop reads and does nothing else. A program that rewrites an operand while
+  waiting polls a counter that keeps resetting, and hangs.
+- **The result is latched** when the operation completes. While one is in
+  flight, the result registers still hold the one before it. A program that
+  reads before the status says done reads the previous answer, not this one.
+- **Idle lasts exactly the cycle the write lands on.** Nothing can read the
+  status in the cycle it wrote, so a poll loop always sees busy at least once
+  before it sees done.
+
+The operands are masked to `size` bits and the result is twice that, read back
+as two halves of one register — which is why sixteen bits per operand is the
+widest on offer. `latency` is in this machine's cycles; see *Time is the instruction
+count* below for what one of those is, and why the number will not match the
+hardware's cycle for cycle.
+
+| `operation` | |
+|---|---|
+| `mul` | an unsigned product, twice the operand width |
+
+One behaviour, because one is what the coursework needs — the multiplier IP, and
+the projects built on it. Adding another is a row in `devices.cpp`; a peripheral
+that runs a *script* is the general answer and a far larger piece of work, and
+`custom` plus a Python model covers that ground until someone needs it.
+
 ### Overlapping addresses
 
 Two devices may be given addresses that overlap. The later arrival wins the
@@ -185,8 +251,9 @@ load = "sine_table.mem" # resolved relative to this file
 ```
 
 Understood keys: `type`, `address` or `slot`, `name`, `size`, `value`, `load`,
-`readonly`, `digits`, and `imem`/`dmem` under `[machine]`. Anything else is an
-error naming the line and listing what was expected.
+`readonly`, `digits`, `operation`, `latency`, and `imem`/`dmem` under
+`[machine]`. Anything else is an error naming the line and listing what was
+expected.
 
 Addresses are written rather than slot numbers because an address is what the
 program uses and what every panel shows; a slot number is arithmetic. An
@@ -196,6 +263,29 @@ same device.
 Applying a configuration **replaces** the devices rather than adding to them, so
 a file describes a machine reproducibly. `File → Save peripherals` writes the
 current set back out.
+
+### From the command line
+
+`--devices <file.toml>` gives a run the machine a file describes — its
+peripherals and its memory sizes both:
+
+```sh
+rv32 run prog.s      --devices board.toml
+rv32 test prog.s     --devices board.toml
+rv32 dbg prog.s      --devices board.toml
+rv32 exec 00a00513   --devices board.toml
+rv32 asm prog.s --pad --devices board.toml
+```
+
+It is the same file the GUI loads with `File → Load peripherals`, and the same
+one `--board` used to name — `--board` still works and means exactly this.
+
+Under `asm` only the memory sizes are read, because that is all an image can
+carry: what `--pad` pads to has to be the depth of the array the file will be
+read into. Under every other command the peripherals are attached as well.
+
+The configuration is applied **before** the program is loaded, since it can
+resize memory and a resize truncates what no longer fits.
 
 ### Editing and undoing
 
@@ -208,9 +298,10 @@ follow from that:
   unable to would be an obstacle, not a safeguard — the assembler is where a
   write to read-only memory should be caught.
 - Reverse stepping undoes a write to any device with no per-device history at
-  all: the debugger's ordinary one-word memory delta plus `poke` covers it. Only
-  the UART needs more, since a growing output string is not a register, and its
-  length rides in a single extra word.
+  all: the debugger's ordinary one-word memory delta plus `poke` covers it. Two
+  devices need more, and one extra field each is enough for both — the UART's
+  output length, since a growing string is not a register, and a `function`
+  device's start cycle and last result.
 
 Peeking cannot consume anything, which matters because a memory view redraws
 constantly — merely looking at the machine must not change it.
@@ -219,12 +310,20 @@ Switch inputs survive a reset, since physical switches on a board do not move
 when the core is reset. A preloaded memory block survives one too: a lookup
 table has to still be there after the machine restarts.
 
-### Time is the cycle counter
+### Time is the instruction count
 
-There is no wall clock. `mtime` is the retired-cycle count, which is the choice
-that makes everything else work: the same program takes the same interrupt on
-the same cycle every run, so the self-checking test programs stay meaningful and
-reverse stepping is exact rather than approximate.
+There is no wall clock. `mtime` is the **retired-instruction count** — it
+advances by one per instruction — which is the choice that makes everything else
+work: the same program takes the same interrupt on the same instruction every
+run, so the self-checking test programs stay meaningful and reverse stepping is
+exact rather than approximate.
+
+**Hardware `mtime` counts clock cycles instead**, and an instruction is more
+than one cycle there. So a delay tuned by counting `mtime` here is not the same
+delay on the board, and the two will not agree instruction for instruction on
+when a deadline passes. Everything that follows from a *comparison* — waiting
+until `mtime` reaches a value, measuring one interval against another — carries
+over; a number of cycles does not.
 
 `mtimecmp` is 32 bits here, where a real machine has a 64-bit one that must be
 written high half first to avoid firing spuriously in between. That hazard is
@@ -235,6 +334,32 @@ and no program on a 4096-instruction machine reaches four billion cycles.
 counter to the armed timer's deadline — the machine has nothing else to do, and
 burning instructions would make the cycle count meaningless. With nothing armed
 and nothing pending, it halts and says so instead of waiting forever.
+
+### Interrupts land earlier here than on hardware
+
+This machine checks for a pending interrupt strictly between instructions, so a
+handler begins the moment the deadline passes. A pipelined core takes one only
+when it can — instructions already in flight retire first — so the handler
+starts a little later there. Neither is wrong: RISC-V does not specify interrupt
+latency.
+
+The gap is one or two instructions per interrupt, and it is not constant: it
+depends on what happened to be in the pipeline, so the same program shows a
+different skid at different points in its own run. It also **compounds**, when a
+handler rearms the deadline from inside itself — each late start pushes the next
+one later. Measured against the FPGA core this emulator is a reference for, over
+eight ticks of one program, `mtime` at handler entry drifted from 0 to 10.
+
+What this means for a program:
+
+- A program written **producer/consumer** — the handler publishes, the main loop
+  consumes only what has been published — is untouched by it, and prints
+  identical output on both machines while their timers drift apart.
+- A program whose output depends on **when** an interrupt lands will answer
+  differently on the board, and the gap widens over a run.
+
+The second is worth knowing before it is discovered on hardware. It is also
+worth knowing that the first is a design choice available for free.
 
 ## Alignment
 

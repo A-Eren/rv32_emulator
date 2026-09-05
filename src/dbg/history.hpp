@@ -2,8 +2,8 @@
 //
 // RV32 makes this genuinely cheap: an instruction writes at most one register,
 // at most one CSR and at most one memory word, so a fixed-size record is a
-// complete inverse. A 64 Ki ring of 48-byte records is about 3 MB and covers
-// far more steps than any teaching scenario needs.
+// complete inverse. A 64 Ki ring of records this size is a few megabytes and
+// covers far more steps than any teaching scenario needs.
 //
 // Being able to say "wait, what did that srai do?" and press a key to watch it
 // again is, per unit of code, the most valuable thing in the debugger.
@@ -35,9 +35,9 @@ struct StepDelta {
     u64 cycle_before = 0;
     u64 instret_before = 0;
     /// The device a write landed on, and the state its peek/poke could not
-    /// carry. See StepOutcome for why one word is enough.
+    /// carry. See StepOutcome for why one field is enough.
     u32 device_slot = kNoDevice;
-    u32 device_aux_before = 0;
+    u64 device_aux_before = 0;
 
     static constexpr u32 kNoDevice = 0xffff'ffffu;
 

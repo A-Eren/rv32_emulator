@@ -132,7 +132,14 @@ conhost does not do by itself.
 ./build/debug/rv32 test tests/asm/*.s          # self-checking assembly tests
 ./build/debug/rv32 dbg examples/fib.s          # interactive debugger
 ./build/debug/rv32-gui examples/fib.s          # the desktop window
+
+./build/debug/rv32 run examples/fib.s --devices examples/board.toml
 ```
+
+`--devices` gives the run the machine a board file describes: its peripherals
+and its memory sizes both. The same file the GUI loads with `File → Load
+peripherals`, so a machine assembled by hand in the window can be handed
+straight to a script. See [docs/memory-map.md](docs/memory-map.md).
 
 The debugger steps by source line by default, so a `li` that expands to two
 instructions counts as one step — and `si` shows the seam:

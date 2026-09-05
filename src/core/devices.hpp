@@ -27,8 +27,8 @@ public:
     u32 peek(u32 offset) const override { return offset == 0x4 ? 1u : 0u; }
     // The output is a growing string, which no peek/poke pair can express, so
     // its length rides in the aux slot instead.
-    u32 aux_state() const override { return static_cast<u32>(output_.size()); }
-    void set_aux_state(u32 value) override { truncate(value); }
+    u64 aux_state() const override { return output_.size(); }
+    void set_aux_state(u64 value) override { truncate(static_cast<std::size_t>(value)); }
 
     std::string state_summary() const override;
 
@@ -174,14 +174,16 @@ private:
     u32 value_ = 0;
 };
 
-/// The cycle counter, mirrored into the address space so a program can read it
-/// with a plain `lw`. This is also `mtime`: the machine has no wall clock, and
-/// tying time to the cycle counter is what keeps interrupts reproducible.
+/// The machine's clock, mirrored into the address space so a program can read
+/// it with a plain `lw`. This is also `mtime`: the machine has no wall clock,
+/// and tying time to a counter of retired instructions is what keeps interrupts
+/// reproducible. Hardware `mtime` counts clock cycles, which is not the same
+/// number -- see docs/memory-map.md.
 ///   +0x0  R  low word    +0x4  R  high word
 class CycleDevice final : public Device {
 public:
     std::string_view type_name() const override { return "mtime"; }
-    std::string_view description() const override { return "cycle counter / mtime"; }
+    std::string_view description() const override { return "instruction count / mtime"; }
 
     u32 read(u32 offset, u8 /*width*/) override { return peek(offset); }
     void write(u32 /*offset*/, u8 /*width*/, u32 /*value*/) override {}
@@ -190,7 +192,9 @@ public:
     u32 peek(u32 offset) const override;
     std::string state_summary() const override;
 
-    void set_cycles(u64 cycles) { cycles_ = cycles; }
+    /// This device *is* the clock, so being told what it reads is all it does.
+    void set_now(u64 now) override { cycles_ = now; }
+    u64 cycles() const { return cycles_; }
 
 private:
     u64 cycles_ = 0;
@@ -322,8 +326,8 @@ public:
     u32 peek(u32 offset) const override;
     void poke(u32 offset, u32 value) override;
 
-    u32 aux_state() const override { return raising_ ? 1u : 0u; }
-    void set_aux_state(u32 value) override { raising_ = value != 0; }
+    u64 aux_state() const override { return raising_ ? 1u : 0u; }
+    void set_aux_state(u64 value) override { raising_ = value != 0; }
     u32 interrupt_lines(u64 /*now*/) const override { return raising_ ? kIrqExternal : 0u; }
 
     std::vector<InputControl> inputs() const override;
@@ -340,6 +344,135 @@ private:
     std::string description_;
     std::vector<u32> words_;
     bool raising_ = false;
+};
+
+/// What a function device computes. One entry so far, because one is what the
+/// coursework needs: adding a row here breaks the switches in devices.cpp until
+/// they handle it, which is where a new behaviour should have to be written
+/// down rather than defaulted.
+enum class FunctionOp : u8 {
+    /// An unsigned product, twice the operand width -- Vivado's mult_gen as the
+    /// IP homework configures it.
+    Mul,
+};
+
+std::string_view function_op_name(FunctionOp op);
+/// Resolve a name from a board file. False if nothing is called that.
+bool parse_function_op(std::string_view name, FunctionOp& out);
+/// Every behaviour that can be named, for listing in an error message.
+const std::vector<std::string_view>& function_op_names();
+
+/// The latency a function device has unless a file says otherwise: the seven
+/// cycles the IP homework's controller counts. Any non-zero number would do --
+/// what matters is that a program has to poll rather than read straight
+/// through, which is the whole point of the exercise.
+inline constexpr u32 kDefaultFunctionLatency = 7;
+/// The operand width a function device has unless a file says otherwise: the
+/// 8 x 8 the IP homework configures its multiplier as.
+inline constexpr int kDefaultFunctionWidth = 8;
+/// The widest operand a function device takes. The result is twice as wide and
+/// is read as two halves of a register, so sixteen bits in is the most that
+/// comes back out of a 32-bit word.
+inline constexpr int kMaxFunctionWidth = 16;
+
+/// A peripheral whose output is a *function* of its input, rather than whatever
+/// was last written to it. This is what an IP core is, and it is the one shape
+/// `custom` cannot take: a register file can only hand back what it was given.
+///
+///   +0x00  RW  operand A          +0x04  RW  operand B
+///   +0x08  R   result, low half   +0x0c  R   result, high half
+///   +0x10  R   status: 0 idle, 1 busy, 2 done
+///
+/// The protocol is the IP homework's, transcribed from its controller:
+///
+///   * **any** write restarts the operation, whichever register it names. That
+///     is the rule its guideline is warning about -- a program that rewrites an
+///     operand while waiting polls a counter that keeps resetting and hangs. It
+///     is reproduced rather than smoothed over, because it is the part of
+///     driving a peripheral the exercise is actually about.
+///   * the result is *latched* when the operation completes, so while one is in
+///     flight the result registers still read the previous one.
+///   * the operands stay narrow and the result is read as two halves, because
+///     that is the interface the homework specifies.
+///
+/// Nothing here counts for itself. The state is a function of the operands, the
+/// cycle the last write landed on, and what the clock reads now -- which is why
+/// reverse stepping puts it back with the machinery that was already there,
+/// exactly as the timer's pending bit does.
+class FunctionDevice final : public Device {
+public:
+    explicit FunctionDevice(FunctionOp op = FunctionOp::Mul,
+                            int width = kDefaultFunctionWidth,
+                            u32 latency = kDefaultFunctionLatency, std::string name = "function");
+
+    /// Status values, as the homework numbers them.
+    enum : u32 { kIdle = 0, kBusy = 1, kDone = 2 };
+
+    static constexpr u32 kOffsetA = 0x00;
+    static constexpr u32 kOffsetB = 0x04;
+    static constexpr u32 kResultLow = 0x08;
+    static constexpr u32 kResultHigh = 0x0c;
+    static constexpr u32 kStatus = 0x10;
+
+    std::string_view type_name() const override { return "function"; }
+    std::string_view description() const override { return description_; }
+    std::size_t slot_count() const override;
+
+    u32 read(u32 offset, u8 /*width*/) override { return peek(offset); }
+    void write(u32 offset, u8 width, u32 value) override;
+    void reset() override;
+
+    u32 peek(u32 offset) const override;
+    void poke(u32 offset, u32 value) override;
+
+    // Two things a write changes that no register holds: when the operation
+    // started, and the result the one before it left behind.
+    u64 aux_state() const override {
+        return (static_cast<u64>(started_) << 32) | latched_;
+    }
+    void set_aux_state(u64 value) override {
+        started_ = static_cast<u32>(value >> 32);
+        latched_ = static_cast<u32>(value);
+    }
+    // Kept to 32 bits, like mtimecmp and for the same reason: a machine of a
+    // few thousand instructions does not reach four billion cycles, and the
+    // pair has to fit alongside the latched result in one aux field.
+    void set_now(u64 now) override { now_ = static_cast<u32>(now); }
+
+    std::vector<InputControl> inputs() const override;
+    void set_input(std::size_t index, u32 value) override;
+    std::string state_summary() const override;
+
+    FunctionOp operation() const { return op_; }
+    int width() const { return width_; }
+    u32 latency() const { return latency_; }
+
+    /// 0 idle, 1 busy, 2 done -- derived, never stored.
+    u32 status() const;
+    /// What the result registers currently hold: this operation's answer once
+    /// it is done, the previous one's until then.
+    u32 result() const;
+
+private:
+    /// The answer for the operands as they stand, whether or not it is ready.
+    u32 compute() const;
+    /// Take the result of a completed operation before a new write discards the
+    /// operands that produced it. The only moment latched_ ever moves.
+    void latch_if_done();
+
+    FunctionOp op_;
+    int width_;
+    u32 latency_;
+    std::string description_;
+
+    u32 a_ = 0;
+    u32 b_ = 0;
+    /// The result of the last *completed* operation.
+    u32 latched_ = 0;
+    /// The cycle the current operation began, and what the clock reads now.
+    /// Their difference is the whole of the timing.
+    u32 started_ = 0;
+    u32 now_ = 0;
 };
 
 /// A bank of 7-segment digits: one byte per digit, shown as glyphs rather than

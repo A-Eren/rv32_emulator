@@ -184,6 +184,10 @@ u32 Bus::pending_interrupts(u64 now) const {
     return pending;
 }
 
+void Bus::set_now(u64 now) {
+    for (const std::unique_ptr<Device>& device : owned_) device->set_now(now);
+}
+
 void Bus::reset() {
     dmem_.clear();
     for (const std::unique_ptr<Device>& device : owned_) device->reset();

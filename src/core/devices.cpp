@@ -267,6 +267,151 @@ std::string RamDevice::state_summary() const {
 }
 
 // ---------------------------------------------------------------------------
+// FunctionDevice
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// The names a board file may use. The switch in function_op_name is what makes
+/// adding a behaviour break the build; this is what makes it appear in the
+/// error message that lists them, and the two are kept side by side so that
+/// adding a row to one is an obvious prompt to add it to the other.
+struct FunctionOpEntry {
+    std::string_view name;
+    FunctionOp op;
+};
+constexpr FunctionOpEntry kFunctionOps[] = {
+    {"mul", FunctionOp::Mul},
+};
+
+}  // namespace
+
+std::string_view function_op_name(FunctionOp op) {
+    switch (op) {
+        case FunctionOp::Mul: return "mul";
+    }
+    return "";
+}
+
+bool parse_function_op(std::string_view name, FunctionOp& out) {
+    for (const FunctionOpEntry& entry : kFunctionOps) {
+        if (entry.name == name) {
+            out = entry.op;
+            return true;
+        }
+    }
+    return false;
+}
+
+const std::vector<std::string_view>& function_op_names() {
+    static const std::vector<std::string_view> names = [] {
+        std::vector<std::string_view> out;
+        for (const FunctionOpEntry& entry : kFunctionOps) out.push_back(entry.name);
+        return out;
+    }();
+    return names;
+}
+
+FunctionDevice::FunctionDevice(FunctionOp op, int width, u32 latency, std::string name)
+    : op_(op), width_(std::clamp(width, 1, kMaxFunctionWidth)), latency_(latency) {
+    set_label(std::move(name));
+    description_ = std::string(function_op_name(op_)) + ", " + std::to_string(width_) + " x " +
+                   std::to_string(width_) + ", " + std::to_string(latency_) +
+                   (latency_ == 1 ? " cycle" : " cycles");
+}
+
+std::size_t FunctionDevice::slot_count() const {
+    constexpr u32 kBytes = kStatus + 4;
+    return (kBytes + kSlotSize - 1) / kSlotSize;
+}
+
+u32 FunctionDevice::status() const {
+    // A clock that has gone behind the start reads as a write that has just
+    // landed, which is what it was: reverse stepping restores the cycle counter
+    // and the start together, and this is the moment between them.
+    const u32 elapsed = now_ >= started_ ? now_ - started_ : 0;
+    if (elapsed == 0) return kIdle;
+    return elapsed <= latency_ ? kBusy : kDone;
+}
+
+u32 FunctionDevice::compute() const {
+    switch (op_) {
+        case FunctionOp::Mul: return (a_ * b_) & width_mask(2 * width_);
+    }
+    return 0;
+}
+
+u32 FunctionDevice::result() const { return status() == kDone ? compute() : latched_; }
+
+void FunctionDevice::latch_if_done() {
+    if (status() == kDone) latched_ = compute();
+}
+
+u32 FunctionDevice::peek(u32 offset) const {
+    switch (offset) {
+        case kOffsetA: return a_;
+        case kOffsetB: return b_;
+        case kResultLow: return result() & width_mask(width_);
+        case kResultHigh: return (result() >> width_) & width_mask(width_);
+        case kStatus: return status();
+        default: return 0;
+    }
+}
+
+void FunctionDevice::write(u32 offset, u8 /*width*/, u32 value) {
+    // Whatever it names, the write restarts the operation -- so the answer the
+    // last one produced has to be taken now, before its operands are gone.
+    latch_if_done();
+    const u32 mask = width_mask(width_);
+    if (offset == kOffsetA) {
+        a_ = value & mask;
+    } else if (offset == kOffsetB) {
+        b_ = value & mask;
+    }
+    started_ = now_;
+}
+
+void FunctionDevice::poke(u32 offset, u32 value) {
+    // The person's path, not the program's: setting a register by hand from the
+    // memory view must not start the peripheral, or looking at a machine would
+    // run it. The result and the status are computed, so there is nothing there
+    // to set -- the same as poking a UART's ready bit.
+    const u32 mask = width_mask(width_);
+    if (offset == kOffsetA) {
+        a_ = value & mask;
+    } else if (offset == kOffsetB) {
+        b_ = value & mask;
+    }
+}
+
+void FunctionDevice::reset() {
+    a_ = 0;
+    b_ = 0;
+    latched_ = 0;
+    started_ = 0;
+    now_ = 0;
+}
+
+std::vector<InputControl> FunctionDevice::inputs() const {
+    const u32 mask = width_mask(width_);
+    return {
+        InputControl{"A", InputKind::Number, a_, width_, 0, mask},
+        InputControl{"B", InputKind::Number, b_, width_, 0, mask},
+    };
+}
+
+void FunctionDevice::set_input(std::size_t index, u32 value) {
+    if (index == 0) poke(kOffsetA, value);
+    if (index == 1) poke(kOffsetB, value);
+}
+
+std::string FunctionDevice::state_summary() const {
+    static const char* const kStatusNames[] = {"idle", "busy", "done"};
+    return summary("%s  a=%u b=%u -> %u  %s", std::string(function_op_name(op_)).c_str(), a_, b_,
+                   result(), kStatusNames[status()]);
+}
+
+// ---------------------------------------------------------------------------
 // Display
 // ---------------------------------------------------------------------------
 

@@ -1,6 +1,6 @@
 # A machine with more of a board about it than the default has.
 #
-# Load it from the GUI with File -> Load peripherals, or pass it to the
+# Load it from the GUI with File -> Load peripherals, or pass it to any of the
 # command line tools with --devices. Applying a configuration replaces the
 # default set entirely, so what is here is exactly what the machine gets.
 
@@ -67,3 +67,15 @@ type = "custom"
 name = "sensor"
 address = 0xffff0110
 size = 2
+
+# A peripheral that computes rather than remembers: the multiplier IP from the
+# course's IP homework. Write both operands -- the write is what starts it --
+# poll the status register until it reads 2, then read the product as two
+# halves. Any write restarts it, so the poll loop reads and does nothing else.
+[[device]]
+type = "function"
+name = "multiplier"
+address = 0xffff0120
+operation = "mul"
+size = 8                # bits per operand; the product is twice that
+latency = 7             # cycles it reports busy

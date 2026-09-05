@@ -47,7 +47,9 @@ void print_usage() {
         "  -o <file>             instruction image to write (default imem.mem)\n"
         "  --dmem <file>         data image to write or load (default dmem.mem)\n"
         "  --pad                 emit the full memory array, not just what is used\n"
-        "  --board <file.toml>   take the memory sizes --pad pads to from a machine\n"
+        "  --devices <file.toml> build the machine a board file describes: its\n"
+        "                        peripherals, and the memory sizes --pad pads to\n"
+        "                        (--board is the same option under its older name)\n"
         "  --annotate            add disassembly comments to the .mem output\n"
         "  --strict-word-mem     warn on sub-word loads and stores\n"
         "  --trace               print each instruction as it executes\n"
@@ -69,10 +71,11 @@ struct Options {
     /// Emit the teaching notes (the 'la' sizing explanation). Useful while
     /// learning, pure noise in a test runner.
     bool explain = true;
-    /// A machine description, which is where the memory sizes come from. What
-    /// --pad pads to has to be the size of the array the file will be loaded
-    /// into, and that is a property of the machine rather than of this run.
-    std::string board;
+    /// A machine description: the peripherals a run gets, and the memory sizes
+    /// it gets them alongside. What --pad pads to has to be the size of the
+    /// array the file will be loaded into, and that is a property of the
+    /// machine rather than of this run.
+    std::string machine;
     std::vector<std::string> positional;
 };
 
@@ -92,7 +95,8 @@ bool parse_options(const std::vector<std::string>& args, Options& out) {
             out.annotate = true;
                 } else if (arg == "--strict-word-mem") {
             out.strict_word_mem = true;
-        } else if (arg == "--limit" || arg == "--dmem" || arg == "-o" || arg == "--board") {
+        } else if (arg == "--limit" || arg == "--dmem" || arg == "-o" || arg == "--devices" ||
+                   arg == "--board") {
             if (i + 1 >= args.size()) {
                 std::fprintf(stderr, "rv32: %s needs a value\n", arg.c_str());
                 return false;
@@ -101,8 +105,12 @@ bool parse_options(const std::vector<std::string>& args, Options& out) {
                 out.limit = std::strtoull(args[++i].c_str(), nullptr, 0);
             } else if (arg == "-o") {
                 out.output_path = args[++i];
-            } else if (arg == "--board") {
-                out.board = args[++i];
+            } else if (arg == "--devices" || arg == "--board") {
+                // One file and one option. --board named it back when the only
+                // thing read out of it was the pair of memory sizes; it names
+                // the same file, so it keeps working rather than becoming an
+                // error someone has to look up.
+                out.machine = args[++i];
             } else {
                 out.dmem_path = args[++i];
             }
@@ -196,13 +204,76 @@ void run_machine(core::Hart& hart, const Options& options) {
     if (!uart.empty()) std::printf("\nuart output:\n%s\n", uart.c_str());
 }
 
+/// Read the machine description, if one was named. Not naming one is not an
+/// error: it means the machine a hart has by default.
+bool read_machine(const Options& options, core::DeviceConfig& out) {
+    if (options.machine.empty()) return true;
+    out = core::read_device_config(options.machine);
+    if (!out.ok()) {
+        std::fprintf(stderr, "rv32: %s\n", out.error.c_str());
+        return false;
+    }
+    return true;
+}
+
+/// Give a hart the peripherals and the memory sizes a description already read
+/// names. `report_warnings` is false for the second and later machines built
+/// from one file, whose overlaps would be the same sentence again.
+///
+/// Every caller runs this *before* loading the program image, because applying
+/// a configuration can resize memory and a resize truncates what no longer
+/// fits -- configuring afterwards would quietly cut the program down.
+bool apply_machine(core::Hart& hart, const core::DeviceConfig& config, const Options& options,
+                   bool report_warnings = true) {
+    if (options.machine.empty()) return true;
+
+    std::vector<std::string> warnings;
+    const std::string error = core::apply_machine_config(
+        hart, config, core::directory_of(options.machine), &warnings);
+    if (!error.empty()) {
+        std::fprintf(stderr, "rv32: %s\n", error.c_str());
+        return false;
+    }
+    // Overlapping addresses are something the format deliberately allows, so
+    // this is a warning rather than a refusal -- but never a silent one: a
+    // device that quietly stopped answering is the bug that costs an afternoon.
+    if (report_warnings) {
+        for (const std::string& warning : warnings) {
+            std::fprintf(stderr, "rv32: warning: %s\n", warning.c_str());
+        }
+    }
+    return true;
+}
+
+/// Read and apply, for the commands that build one machine and assemble
+/// nothing into it.
+bool configure_machine(core::Hart& hart, const Options& options) {
+    core::DeviceConfig config;
+    return read_machine(options, config) && apply_machine(hart, config, options);
+}
+
+/// The assembler needs the memory sizes too, and they have to be the ones the
+/// program will actually run on: loading truncates at the end of the memory, so
+/// a program too big for the machine described in the file becomes a different
+/// program unless the assembler is holding the same numbers and can say so.
+as::AssembleOptions assemble_options_for(const Options& options,
+                                         const core::DeviceConfig& machine) {
+    as::AssembleOptions out;
+    out.strict_word_mem = options.strict_word_mem;
+    out.explain_pseudo_sizing = options.explain;
+    if (machine.imem_size != 0) out.imem_size = machine.imem_size;
+    if (machine.dmem_size != 0) out.dmem_size = machine.dmem_size;
+    return out;
+}
+
 bool ends_with(const std::string& text, const std::string& suffix) {
     return text.size() >= suffix.size() &&
            text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
 /// Assemble a file, printing diagnostics. Returns false if it did not assemble.
-bool assemble_file(const std::string& path, const Options& options, as::AssembledProgram& out) {
+bool assemble_file(const std::string& path, const Options& options,
+                   const core::DeviceConfig& machine, as::AssembledProgram& out) {
     std::ifstream file(path, std::ios::binary);
     if (!file) {
         std::fprintf(stderr, "rv32: cannot open '%s'\n", path.c_str());
@@ -212,10 +283,7 @@ bool assemble_file(const std::string& path, const Options& options, as::Assemble
     contents << file.rdbuf();
 
     const as::SourceFile source(path, contents.str());
-    as::AssembleOptions assemble_options;
-    assemble_options.strict_word_mem = options.strict_word_mem;
-    assemble_options.explain_pseudo_sizing = options.explain;
-    out = as::assemble(source, assemble_options);
+    out = as::assemble(source, assemble_options_for(options, machine));
 
     if (!out.diagnostics.empty()) {
         as::RenderOptions render_options;
@@ -235,8 +303,11 @@ int command_asm(const std::vector<std::string>& args) {
         return 2;
     }
 
+    core::DeviceConfig machine;
+    if (!read_machine(options, machine)) return 1;
+
     as::AssembledProgram program;
-    if (!assemble_file(options.positional[0], options, program)) return 1;
+    if (!assemble_file(options.positional[0], options, machine, program)) return 1;
 
     const std::string imem_path = options.output_path.empty() ? "imem.mem" : options.output_path;
     const std::string dmem_path = options.dmem_path.empty() ? "dmem.mem" : options.dmem_path;
@@ -245,15 +316,8 @@ int command_asm(const std::vector<std::string>& args) {
     // a machine has by default.
     u32 imem_bytes = core::kDefaultImemSize;
     u32 dmem_bytes = core::kDefaultDmemSize;
-    if (!options.board.empty()) {
-        const core::DeviceConfig board = core::read_device_config(options.board);
-        if (!board.ok()) {
-            std::fprintf(stderr, "rv32: %s\n", board.error.c_str());
-            return 1;
-        }
-        if (board.imem_size != 0) imem_bytes = board.imem_size;
-        if (board.dmem_size != 0) dmem_bytes = board.dmem_size;
-    }
+    if (machine.imem_size != 0) imem_bytes = machine.imem_size;
+    if (machine.dmem_size != 0) dmem_bytes = machine.dmem_size;
 
     core::MemFileOptions mem_options;
     mem_options.pad_to_full = options.pad;
@@ -301,16 +365,25 @@ int command_test(const std::vector<std::string>& args) {
         return 2;
     }
 
+    // Read before assembling anything: a machine file that will not parse is
+    // worth saying once, up front, rather than after thirty programs have been
+    // assembled into a machine that was never built.
+    core::DeviceConfig machine;
+    if (!read_machine(options, machine)) return 2;
+
     int failures = 0;
+    bool warned = false;
     for (const std::string& path : options.positional) {
         as::AssembledProgram program;
-        if (!assemble_file(path, options, program)) {
+        if (!assemble_file(path, options, machine, program)) {
             std::printf("FAIL  %s (did not assemble)\n", path.c_str());
             ++failures;
             continue;
         }
 
         core::Hart hart;
+        if (!apply_machine(hart, machine, options, !warned)) return 2;
+        warned = true;
         hart.imem().load_words(program.imem_words);
         hart.reset(program.entry);
         hart.bus().dmem().load_bytes(program.dmem_bytes);
@@ -365,12 +438,14 @@ int command_dbg(const std::vector<std::string>& args) {
     std::ostringstream contents;
     contents << file.rdbuf();
 
-    dbg::DebugSession session;
-    as::AssembleOptions assemble_options;
-    assemble_options.strict_word_mem = options.strict_word_mem;
-    assemble_options.explain_pseudo_sizing = options.explain;
+    core::DeviceConfig machine;
+    if (!read_machine(options, machine)) return 1;
 
-    if (!session.load_source(contents.str(), options.positional[0], assemble_options)) {
+    dbg::DebugSession session;
+    if (!apply_machine(session.hart(), machine, options)) return 1;
+
+    if (!session.load_source(contents.str(), options.positional[0],
+                             assemble_options_for(options, machine))) {
         as::RenderOptions render_options;
         render_options.color = cmd::supports_color(stderr);
         std::fputs(as::render_all(session.program().diagnostics, session.source(), render_options)
@@ -433,6 +508,7 @@ int command_exec(const std::vector<std::string>& args) {
     }
 
     core::Hart hart;
+    if (!configure_machine(hart, options)) return 1;
     hart.imem().load_words(words);
     hart.reset(0);
     run_machine(hart, options);
@@ -449,13 +525,18 @@ int command_run(const std::vector<std::string>& args) {
 
     const std::string& path = options.positional[0];
 
+    core::DeviceConfig machine;
+    if (!read_machine(options, machine)) return 1;
+
     // Assembly source runs directly: there is no reason to make someone write
     // the .mem file out first just to run their own program.
     if (ends_with(path, ".s") || ends_with(path, ".S") || ends_with(path, ".asm")) {
-        as::AssembledProgram program;
-        if (!assemble_file(path, options, program)) return 1;
-
         core::Hart hart;
+        if (!apply_machine(hart, machine, options)) return 1;
+
+        as::AssembledProgram program;
+        if (!assemble_file(path, options, machine, program)) return 1;
+
         hart.imem().load_words(program.imem_words);
         hart.reset(program.entry);
         hart.bus().dmem().load_bytes(program.dmem_bytes);
@@ -470,6 +551,7 @@ int command_run(const std::vector<std::string>& args) {
     }
 
     core::Hart hart;
+    if (!apply_machine(hart, machine, options)) return 1;
     hart.imem().load_words(imem_words);
 
     if (!options.dmem_path.empty()) {

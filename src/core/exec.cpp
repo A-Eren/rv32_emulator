@@ -48,7 +48,7 @@ ExecResult execute(CpuState& cpu, Bus& bus, const isa::DecodedInstr& instr,
         // A device may hold state no register can express; capture it before
         // the write rather than trying to reconstruct it after.
         const Device* target = bus.device_for_address(aligned);
-        const u32 aux_before = target != nullptr ? target->aux_state() : 0u;
+        const u64 aux_before = target != nullptr ? target->aux_state() : 0u;
 
         const MemResult result = bus.store(addr, width, rs2);
         if (!result.ok) return raise(result.cause, addr);

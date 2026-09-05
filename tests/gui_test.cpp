@@ -568,6 +568,47 @@ RV_TEST(gui, a_block_and_a_custom_peripheral_get_fields_to_type_into) {
     RV_CHECK_EQ(bus.load(core::slot_address(0), 4, false).value, 42u);
 }
 
+RV_TEST(gui, a_peripheral_that_computes_offers_only_its_operands) {
+    Fixture fixture;
+    core::Bus& bus = fixture.session().hart().bus();
+    bus.detach_all();
+    core::Device* mul = bus.attach(0, core::make_device("function", 8, "multiplier"));
+    RV_CHECK(mul != nullptr);
+    if (mul == nullptr) return;
+
+    auto* panel = fixture.window.findChild<DevicePanel*>();
+    panel->refresh();
+    QTableWidget* list = panel->findChild<QTableWidget*>();
+    list->selectRow(0);
+
+    auto* controls = panel->findChild<QGroupBox*>();
+    RV_CHECK(controls != nullptr);
+    if (controls == nullptr) return;
+
+    // Two operands and nothing else: the result and the status are computed,
+    // so there is nothing there for a person to set.
+    const QList<QLineEdit*> fields = controls->findChildren<QLineEdit*>();
+    RV_CHECK_EQ(fields.size(), 2);
+    if (fields.size() != 2) return;
+
+    fields[0]->setText("12");
+    emit fields[0]->editingFinished();
+    fields[1]->setText("12");
+    emit fields[1]->editingFinished();
+    RV_CHECK_EQ(bus.load(core::slot_address(0), 4, false).value, 12u);
+
+    // The panel names it and says what it is holding, like any other device:
+    // columns are slot, address, name, type, state.
+    panel->refresh();
+    RV_CHECK_STR(list->item(0, 2)->text().toStdString(), "multiplier");
+    RV_CHECK_STR(list->item(0, 3)->text().toStdString(), "function");
+    // The operands it now holds, and idle -- typing into a field is the
+    // person's path, so it loads the register without starting the peripheral.
+    // Only a store from the program does that.
+    RV_CHECK_NE(list->item(0, 4)->text().indexOf("a=12 b=12"), -1);
+    RV_CHECK_NE(list->item(0, 4)->text().indexOf("idle"), -1);
+}
+
 RV_TEST(gui, the_exported_images_are_as_deep_as_the_machine) {
     // The whole point of the tool: the file goes into a block memory of a
     // fixed depth, so the file has to be that many lines whatever the program

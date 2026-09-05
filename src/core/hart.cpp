@@ -127,7 +127,7 @@ StepOutcome Hart::step() {
     if (const auto interrupt = pending_interrupt()) {
         take_interrupt(*interrupt, out);
         ++cpu_.cycle;
-        if (CycleDevice* clock = bus_.cycles()) clock->set_cycles(cpu_.cycle);
+        bus_.set_now(cpu_.cycle);
         return out;
     }
 
@@ -163,6 +163,7 @@ StepOutcome Hart::step() {
     if (!out.instr.valid()) {
         take_trap(TrapCause::IllegalInstruction, out.raw, cpu_.pc, out);
         ++cpu_.cycle;
+        bus_.set_now(cpu_.cycle);
         return out;
     }
 
@@ -221,7 +222,7 @@ StepOutcome Hart::step() {
     // any write above, so an instruction that zeroes mcycle still retires and
     // still counts.
     cpu_.cycle += 1 + result.advance_cycles;
-    if (CycleDevice* clock = bus_.cycles()) clock->set_cycles(cpu_.cycle);
+    bus_.set_now(cpu_.cycle);
 
     if (result.trapped) {
         take_trap(result.cause, result.tval, cpu_.pc, out);

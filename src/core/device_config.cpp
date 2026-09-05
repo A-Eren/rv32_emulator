@@ -104,13 +104,30 @@ const std::vector<u32>& common_sizes(SizeUnit unit) {
     static const std::vector<u32> kBits = {1, 2, 4, 8, 16, 32};
     static const std::vector<u32> kBytes = {64, 128, 256, 512, 1024, 2048, 4096};
     static const std::vector<u32> kWords = {1, 2, 4, 8, 16, 32};
+    // Stops at kMaxFunctionWidth: past that the result no longer fits in the
+    // two halves of a register it is read back through.
+    static const std::vector<u32> kOperandBits = {4, 8, 16};
     switch (unit) {
         case SizeUnit::None: return kNone;
         case SizeUnit::Bits: return kBits;
         case SizeUnit::Bytes: return kBytes;
         case SizeUnit::Words: return kWords;
+        case SizeUnit::OperandBits: return kOperandBits;
     }
     return kNone;
+}
+
+u32 default_size(SizeUnit unit) {
+    switch (unit) {
+        case SizeUnit::None: return 0;
+        // A whole register, and a block big enough to be worth having.
+        case SizeUnit::Bits: return kMaxWidth;
+        case SizeUnit::Bytes: return 256;
+        case SizeUnit::Words: return 4;
+        // 8 x 8: the multiplier IP the coursework is built around.
+        case SizeUnit::OperandBits: return static_cast<u32>(kDefaultFunctionWidth);
+    }
+    return 0;
 }
 
 std::string memory_size_label(u32 bytes) {
@@ -126,6 +143,7 @@ std::string_view unit_name(SizeUnit unit) {
         case SizeUnit::Bits: return "bits";
         case SizeUnit::Bytes: return "bytes";
         case SizeUnit::Words: return "registers";
+        case SizeUnit::OperandBits: return "bits per operand";
     }
     return "";
 }
@@ -157,7 +175,7 @@ const std::vector<DeviceType>& device_catalogue() {
          [](u32, const std::string&) -> std::unique_ptr<Device> {
              return std::make_unique<DisplayDevice>();
          }},
-        {"mtime", "cycle counter / mtime", SizeUnit::None, false,
+        {"mtime", "instruction count / mtime", SizeUnit::None, false,
          [](u32, const std::string&) -> std::unique_ptr<Device> {
              return std::make_unique<CycleDevice>();
          }},
@@ -176,6 +194,16 @@ const std::vector<DeviceType>& device_catalogue() {
         {"rom", "read-only memory block", SizeUnit::Bytes, false,
          [](u32 size, const std::string&) -> std::unique_ptr<Device> {
              return std::make_unique<RamDevice>(size == 0 ? 256u : size, true);
+         }},
+        {"function", "a result computed from its operands, after a latency",
+         SizeUnit::OperandBits, true,
+         [](u32 width, const std::string& name) -> std::unique_ptr<Device> {
+             // `size` is the operand width in bits, the way an IP core is
+             // ordered: an 8 x 8 multiplier is what the IP homework configures.
+             return std::make_unique<FunctionDevice>(
+                 FunctionOp::Mul,
+                 width == 0 ? kDefaultFunctionWidth : static_cast<int>(width),
+                 kDefaultFunctionLatency, name.empty() ? "function" : name);
          }},
         {"custom", "your own registers, settable by hand, can raise IRQ", SizeUnit::Words, true,
          [](u32 size, const std::string& name) -> std::unique_ptr<Device> {
@@ -338,9 +366,25 @@ DeviceConfig parse_device_config(const std::string& text, const std::string& sou
             u32 digits = 4;
             if (!number(digits)) return config;
             spec.digits = static_cast<int>(digits);
+        } else if (key == "operation") {
+            FunctionOp op = FunctionOp::Mul;
+            if (!parse_function_op(value, op)) {
+                std::string known;
+                for (const std::string_view name : function_op_names()) {
+                    if (!known.empty()) known += ", ";
+                    known += name;
+                }
+                fail("unknown operation '" + value + "'; known operations are " + known);
+                return config;
+            }
+            spec.operation = value;
+        } else if (key == "latency") {
+            if (!number(spec.latency)) return config;
+            spec.has_latency = true;
         } else {
             fail("unknown key '" + key +
-                 "'; understood keys are type, slot, size, value, load, readonly, digits");
+                 "'; understood keys are type, slot, size, value, load, readonly, digits, "
+                 "operation, latency");
             return config;
         }
     }
@@ -402,6 +446,8 @@ std::string write_device_config(const DeviceConfig& config) {
         // can be read against the code without a conversion in between.
         out << "address = " << hex_address(slot_address(spec.slot)) << "\n";
         if (!spec.name.empty()) out << "name = \"" << spec.name << "\"\n";
+        if (!spec.operation.empty()) out << "operation = \"" << spec.operation << "\"\n";
+        if (spec.has_latency) out << "latency = " << spec.latency << "\n";
         if (spec.size != 0) out << "size = " << spec.size << "\n";
         if (spec.read_only) out << "readonly = true\n";
         if (!spec.load.empty()) out << "load = \"" << spec.load << "\"\n";
@@ -446,6 +492,15 @@ DeviceConfig describe(const Bus& bus) {
         spec.name = device->label();
         if (const auto* custom = dynamic_cast<const CustomDevice*>(device)) {
             spec.size = custom->word_count();
+        }
+        if (const auto* function = dynamic_cast<const FunctionDevice*>(device)) {
+            // All three, always: what it computes, how wide, and how long it
+            // takes are the device, and a file that left any of them out would
+            // describe a different peripheral.
+            spec.operation = std::string(function_op_name(function->operation()));
+            spec.size = static_cast<u32>(function->width());
+            spec.latency = function->latency();
+            spec.has_latency = true;
         }
         // A width is only worth writing when it is not the whole register --
         // a file full of `size = 32` says nothing.
@@ -500,6 +555,15 @@ std::string apply_device_config(Bus& bus, const DeviceConfig& config,
         std::unique_ptr<Device> device;
         if (spec.type == "display") {
             device = std::make_unique<DisplayDevice>(spec.digits);
+            device->set_label(spec.name);
+        } else if (spec.type == "function") {
+            FunctionOp op = FunctionOp::Mul;
+            if (!spec.operation.empty() && !parse_function_op(spec.operation, op)) {
+                return "unknown operation '" + spec.operation + "'";
+            }
+            device = std::make_unique<FunctionDevice>(
+                op, spec.size == 0 ? kDefaultFunctionWidth : static_cast<int>(spec.size),
+                spec.has_latency ? spec.latency : kDefaultFunctionLatency, spec.name);
             device->set_label(spec.name);
         } else if (spec.type == "ram" || spec.type == "rom") {
             device = std::make_unique<RamDevice>(spec.size == 0 ? 256u : spec.size,

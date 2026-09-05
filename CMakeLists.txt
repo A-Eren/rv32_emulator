@@ -207,3 +207,21 @@ foreach(asm_test ${RV32_ASM_TESTS})
     get_filename_component(asm_name ${asm_test} NAME_WE)
     add_test(NAME asm.${asm_name} COMMAND rv32 test ${asm_test})
 endforeach()
+
+# The same thing on a machine described by a file. Kept out of the glob above
+# because it is the one program that needs an option: it is what covers
+# --devices end to end, and it fails on the default machine by design -- the
+# peripheral it drives and the memory it stores into both come from the file.
+add_test(NAME board.multiplier
+         COMMAND rv32 test ${CMAKE_CURRENT_SOURCE_DIR}/tests/board/multiplier.s
+                 --devices ${CMAKE_CURRENT_SOURCE_DIR}/tests/board/multiplier.toml)
+
+# The other half of it. Loading truncates at the end of the memory, so a
+# program too big for the machine in the file has to be reported by the
+# assembler rather than silently cut down into a different program -- which
+# means the sizes have to reach the assembler and not only the run.
+add_test(NAME board.too_large
+         COMMAND rv32 asm ${CMAKE_CURRENT_SOURCE_DIR}/tests/board/multiplier.s
+                 --devices ${CMAKE_CURRENT_SOURCE_DIR}/tests/board/too_small.toml)
+set_tests_properties(board.too_large PROPERTIES
+                     PASS_REGULAR_EXPRESSION "does not fit in instruction memory")

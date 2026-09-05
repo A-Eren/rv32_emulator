@@ -1,5 +1,6 @@
 #include "cmd/command.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -316,13 +317,39 @@ CmdResult cmd_info(CmdContext& context, const std::vector<std::string>& args) {
         return CmdResult::success();
     }
     if (topic == "mem" || topic == "memory") {
-        char summary[256];
-        std::snprintf(summary, sizeof summary,
+        char line[192];
+        std::snprintf(line, sizeof line,
                       "imem  0x00000000..0x%08x  %zu instructions loaded\n"
-                      "dmem  0x00000000..0x%08x  %zu bytes of initial data\n"
-                      "mmio  0xffff0000..0xffff00ff  uart, leds, switches, cycle counter\n",
+                      "dmem  0x00000000..0x%08x  %zu bytes of initial data\n",
                       session.hart().imem().size() - 1, session.program().map.entries().size(),
                       session.hart().bus().dmem().size() - 1, session.program().dmem_bytes.size());
+        std::string summary = line;
+
+        // The peripherals the machine actually has, asked for rather than
+        // assumed: a board file replaces the default set wholesale, so a fixed
+        // list would name devices that are not there and miss the ones that
+        // are -- which is the same failure as a device that quietly stopped
+        // answering, only printed.
+        const std::vector<const core::Device*> devices = [&] {
+            const std::vector<core::Device*> mutable_devices = session.hart().bus().devices();
+            return std::vector<const core::Device*>(mutable_devices.begin(),
+                                                    mutable_devices.end());
+        }();
+        if (devices.empty()) {
+            summary += "mmio  (nothing attached)\n";
+        }
+        for (const core::Device* device : devices) {
+            const Addr base = device->base_address();
+            const Addr end =
+                base + static_cast<Addr>(std::max<std::size_t>(1, device->slot_count())) *
+                           core::kSlotSize - 1;
+            const std::string name = device->display_name();
+            const std::string type(device->type_name());
+            std::snprintf(line, sizeof line, "mmio  0x%08x..0x%08x  %s%s%s%s\n", base, end,
+                          name.c_str(), name == type ? "" : " (", name == type ? "" : type.c_str(),
+                          name == type ? "" : ")");
+            summary += line;
+        }
         context.print(summary);
         return CmdResult::success();
     }

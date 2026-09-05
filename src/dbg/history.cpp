@@ -67,7 +67,7 @@ bool StepHistory::undo(core::Hart& hart) {
     }
     cpu.cycle = delta.cycle_before;
     cpu.instret = delta.instret_before;
-    if (core::CycleDevice* clock = hart.bus().cycles()) clock->set_cycles(cpu.cycle);
+    hart.bus().set_now(cpu.cycle);
 
     // Stepping back out of a halt makes the machine runnable again.
     hart.clear_halt();
