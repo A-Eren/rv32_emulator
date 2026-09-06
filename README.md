@@ -4,12 +4,15 @@
 
 An RV32IMC_Zicsr_Zifencei emulator, assembler and debugger built for **learning
 and teaching assembly**, with machine-mode interrupts. Not a fast emulator — a visible one. Every design decision
-serves three questions:
+serves four questions:
 
 1. **What exactly changed in this step?** — register and memory diff highlighting
 2. **How did this instruction become 16 or 32 bits?** — a bitfield breakdown
    panel, which for a compressed instruction also shows the one it expands to
 3. **Why did it not assemble?** — line, column, caret, and a suggested fix
+4. **Where is each instruction right now?** — the five pipeline stages with the
+   instruction in each, and the space-time diagram underneath. Stepping by
+   cycle rather than by instruction is what makes a branch's cost visible
 
 The editor suggests the instruction in a small block under the caret that folds
 away once it is chosen, then greys the operands it still wants in after the caret — a form to
@@ -40,6 +43,13 @@ through what you wrote.
 | M6 | Embedded editor | ✅ done |
 | M7 | Encoding panel, diff highlighting, reverse step | ✅ done |
 | M8 | Polish, examples, docs | ✅ done |
+| M9 | Pipeline view: five stages, space-time diagram | ✅ done |
+
+The pipeline is a picture of the machine, not a re-timing of it: instructions
+still execute atomically, `mcycle` still counts them, and the panel keeps its
+own cycle count. Hazards, stalls, forwarding and branch prediction are not
+implemented yet — the front-end fetches straight past a branch and discards
+what it fetched when the branch goes the other way.
 
 ## Building
 

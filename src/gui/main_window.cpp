@@ -36,6 +36,7 @@
 #include "gui/editor_widget.hpp"
 #include "gui/device_panel.hpp"
 #include "gui/encoding_widget.hpp"
+#include "gui/pipeline_widget.hpp"
 #include "isa/disasm.hpp"
 #include "isa/regnames.hpp"
 
@@ -64,7 +65,9 @@ QString from(std::string_view text) {
 }  // namespace
 
 MainWindow::MainWindow(QWidget* parent)
-    : QMainWindow(parent), session_(std::make_unique<dbg::DebugSession>()) {
+    : QMainWindow(parent),
+      session_(std::make_unique<dbg::DebugSession>()),
+      pipeline_model_(*session_) {
     setWindowTitle("rv32");
     resize(1280, 820);
 
@@ -105,6 +108,7 @@ void MainWindow::build_layout() {
     registers_->setShowGrid(false);
 
     encoding_ = new EncodingWidget(*session_, this);
+    pipeline_ = new PipelineWidget(pipeline_model_, *session_, this);
 
     const auto make_text = [this] {
         auto* view = new QPlainTextEdit(this);
@@ -182,6 +186,7 @@ void MainWindow::build_layout() {
 
     dock_ = new QTabWidget(this);
     dock_->addTab(encoding_, "Encoding");
+    dock_->addTab(pipeline_, "Pipeline");
     dock_->addTab(memory_page, "Memory");
     dock_->addTab(console_, "Console");
     dock_->addTab(devices_, "Devices");
@@ -258,10 +263,12 @@ void MainWindow::build_actions() {
         "Write imem.mem and dmem.mem, padded to this machine's depth");
     toolbar->addSeparator();
     add("Step", Qt::Key_F8, &MainWindow::step_line, "One source line, entering calls");
-    add("Step Instr", Qt::Key_F7, &MainWindow::step_instruction,
-        "One machine instruction — shows what a pseudo-instruction expands to");
+    add("Step Cycle", Qt::Key_F7, &MainWindow::step_cycle,
+        "One pipeline cycle — an instruction commits when it reaches EX");
     add("Step Over", Qt::Key_F10, &MainWindow::step_over, "One source line, running calls");
     action_back_ = add("Back", Qt::Key_F6, &MainWindow::step_back, "Undo one source line");
+    add("Back Cycle", QKeySequence("Shift+F7"), &MainWindow::step_back_cycle,
+        "Undo one pipeline cycle");
     add("Run", Qt::Key_F9, &MainWindow::run, "Run until something stops it");
     add("Reset", Qt::Key_F4, &MainWindow::reset_machine, "Restart, keeping breakpoints");
 
@@ -374,6 +381,7 @@ void MainWindow::assemble() {
     session_->load_source(text.toStdString(), name, options);
     // The completer offers this program's labels as branch and load targets.
     editor_->set_symbols(&session_->symbols());
+    pipeline_model_.reset();
     encoding_->follow_pc();
     set_message(QString::asprintf("assembled: %zu instructions, %zu bytes of data",
                                   session_->program().map.entries().size(),
@@ -410,16 +418,40 @@ void MainWindow::report_stop(const dbg::StopEvent& event) {
     refresh_all();
 }
 
-void MainWindow::step_line() { report_stop(session_->step(dbg::StepKind::Line)); }
-void MainWindow::step_instruction() { report_stop(session_->step(dbg::StepKind::Instruction)); }
-void MainWindow::step_over() { report_stop(session_->step(dbg::StepKind::LineOver)); }
+// Everything but Step Cycle moves the machine through the session and then
+// tells the pipeline to adopt where it ended up. Re-deriving what "one source
+// line" means on top of cycles would mean a second copy of the stop rules --
+// breakpoints, watchpoints, the call-depth heuristic -- and two copies is
+// exactly what this program does not have anywhere else.
+void MainWindow::step_line() { step_through_session(dbg::StepKind::Line); }
+void MainWindow::step_over() { step_through_session(dbg::StepKind::LineOver); }
+
+void MainWindow::step_through_session(dbg::StepKind kind) {
+    const dbg::StopEvent event = session_->step(kind);
+    pipeline_model_.resync();
+    report_stop(event);
+}
+
+void MainWindow::step_cycle() { report_stop(pipeline_model_.tick()); }
+
+void MainWindow::step_back_cycle() {
+    if (!pipeline_model_.reverse_tick()) {
+        set_message("no further history: this pipeline has not run a cycle yet", true);
+        return;
+    }
+    // Going back is never itself a reason to stop, so there is no event to
+    // report -- a plain Step is what clears the message and repaints.
+    report_stop(dbg::StopEvent{});
+}
 
 void MainWindow::step_back() {
     if (!session_->can_reverse()) {
         set_message("no further history", true);
         return;
     }
-    report_stop(session_->reverse_step(dbg::StepKind::Line));
+    const dbg::StopEvent event = session_->reverse_step(dbg::StepKind::Line);
+    pipeline_model_.resync();
+    report_stop(event);
 }
 
 void MainWindow::run() {
@@ -439,17 +471,21 @@ void MainWindow::run() {
 
 void MainWindow::on_run_slice() {
     if (const auto event = session_->run_chunk(kRunChunk)) {
+        pipeline_model_.resync();
         report_stop(*event);
         return;
     }
     // Still going: keep the panels current so a long run is watchable.
+    pipeline_model_.resync();
     refresh_registers();
     refresh_status();
+    pipeline_->update();
 }
 
 void MainWindow::reset_machine() {
     run_timer_->stop();
     session_->reset();
+    pipeline_model_.reset();
     encoding_->follow_pc();
     set_message("machine reset; breakpoints kept");
     refresh_all();
@@ -487,6 +523,7 @@ void MainWindow::refresh_all() {
 
     action_back_->setEnabled(session_->can_reverse());
     encoding_->update();
+    pipeline_->update();
 }
 
 void MainWindow::refresh_registers() {

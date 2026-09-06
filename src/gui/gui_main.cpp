@@ -75,10 +75,13 @@ int main(int argc, char** argv) {
     // the layout without a display.
     QCommandLineOption screenshot("screenshot", "render one frame to <file> and exit", "file");
     QCommandLineOption steps("steps", "step this many lines before rendering", "n", "0");
+    QCommandLineOption cycles("cycles", "advance this many pipeline cycles before rendering",
+                              "n", "0");
     QCommandLineOption tab("tab", "select a dock tab before rendering", "name");
     QCommandLineOption caret("caret", "put the caret at <line>:<col> before rendering", "pos");
     parser.addOption(screenshot);
     parser.addOption(steps);
+    parser.addOption(cycles);
     parser.addOption(tab);
     parser.addOption(caret);
     QCommandLineOption suggest("suggest", "open the suggestion bar at the caret");
@@ -114,6 +117,7 @@ int main(int argc, char** argv) {
 
     if (parser.isSet(screenshot)) {
         for (int i = 0, n = parser.value(steps).toInt(); i < n; ++i) window.step_line();
+        for (int i = 0, n = parser.value(cycles).toInt(); i < n; ++i) window.step_cycle();
         if (parser.isSet(tab)) window.show_tab(parser.value(tab));
         if (parser.isSet(caret)) {
             const QStringList parts = parser.value(caret).split(':');

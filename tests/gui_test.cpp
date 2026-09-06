@@ -25,6 +25,7 @@
 #include "gui/device_panel.hpp"
 #include "gui/editor_widget.hpp"
 #include "gui/encoding_widget.hpp"
+#include "gui/pipeline_widget.hpp"
 #include "asm/lexer.hpp"
 #include "gui/highlighter.hpp"
 #include "gui/main_window.hpp"
@@ -119,13 +120,15 @@ RV_TEST(gui, the_execution_arrow_follows_the_pc) {
     RV_CHECK_EQ(fixture.session().current_line().value_or(0), 5u);
 }
 
-RV_TEST(gui, stepping_by_instruction_lands_inside_a_pseudo) {
-    // The whole reason the instruction-level step exists: seeing that
-    // `li a1, 0x12345` is really two instructions.
+RV_TEST(gui, stepping_by_cycle_lands_inside_a_pseudo) {
+    // `li a1, 0x12345` is really two instructions, and cycle stepping still
+    // shows the seam. Only one cycle is needed here rather than the three a
+    // cold pipe takes: a source-line step leaves the pipe as full as the
+    // machine really left it, so the next instruction is already in ID.
     Fixture fixture;
     fixture.window.step_line();  // onto the li
 
-    fixture.window.step_instruction();
+    fixture.window.step_cycle();
     RV_CHECK_EQ(fixture.session().current_line().value_or(0), 5u);
     const auto slot = fixture.session().current_slot();
     RV_CHECK(slot.has_value());
@@ -983,4 +986,88 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication app(argc, argv);
     return rvtest::run_all(argc, argv);
+}
+
+// ---------------------------------------------------------------------------
+// The pipeline panel
+// ---------------------------------------------------------------------------
+
+RV_TEST(gui, the_pipeline_panel_names_the_stage_of_each_instruction) {
+    Fixture fixture;
+    auto* panel = fixture.window.findChild<PipelineWidget*>();
+    RV_CHECK(panel != nullptr);
+
+    // Freshly assembled: nothing is in flight yet, so every stage is a bubble.
+    RV_CHECK(has(panel->stage_summary(), "IF=-"));
+    RV_CHECK(has(panel->stage_summary(), "EX=-"));
+
+    fixture.window.step_cycle();
+    RV_CHECK(has(panel->stage_summary(), "IF=addi"));
+    RV_CHECK(has(panel->stage_summary(), "ID=-"));
+
+    // Three cycles in, the first instruction is in EX and has committed.
+    fixture.window.step_cycle();
+    fixture.window.step_cycle();
+    RV_CHECK(has(panel->stage_summary(), "EX=addi"));
+    RV_CHECK_EQ(fixture.session().cpu().instret, 1u);
+    RV_CHECK_HEX(fixture.session().cpu().x[10], 1u);
+
+    // Actually draw it. stage_summary() reports what the strip says, but the
+    // space-time diagram underneath has geometry of its own, and nothing else
+    // here would notice it walking off the end of a row.
+    RV_CHECK(!panel->grab().isNull());
+}
+
+RV_TEST(gui, the_pipeline_panel_draws_a_run_long_enough_to_flush) {
+    // A loop, so the diagram has more cycles than columns and at least one
+    // branch resolves the other way. Drawing it is the assertion.
+    Fixture fixture(
+        "_start: li   a0, 4\n"
+        "loop:   addi a0, a0, -1\n"
+        "        bne  a0, x0, loop\n"
+        "        ebreak\n");
+    auto* panel = fixture.window.findChild<PipelineWidget*>();
+    RV_CHECK(panel != nullptr);
+
+    for (int i = 0; i < 60; ++i) fixture.window.step_cycle();
+    RV_CHECK(fixture.session().halted());
+    RV_CHECK(!panel->grab().isNull());
+    // Halted, and everything that was in flight has walked out the far end.
+    RV_CHECK(has(panel->stage_summary(), "IF=-"));
+    RV_CHECK(has(panel->stage_summary(), "WB=-"));
+    RV_CHECK_HEX(fixture.session().cpu().x[10], 0u);
+}
+
+RV_TEST(gui, back_cycle_undoes_one_cycle) {
+    Fixture fixture;
+    for (int i = 0; i < 3; ++i) fixture.window.step_cycle();
+    RV_CHECK_EQ(fixture.session().cpu().instret, 1u);
+
+    fixture.window.step_back_cycle();
+    RV_CHECK_EQ(fixture.session().cpu().instret, 0u);
+
+    auto* panel = fixture.window.findChild<PipelineWidget*>();
+    RV_CHECK(panel != nullptr);
+    RV_CHECK(has(panel->stage_summary(), "EX=-"));
+    RV_CHECK(has(panel->stage_summary(), "ID=addi"));
+}
+
+RV_TEST(gui, a_source_line_step_leaves_the_pipeline_showing_what_just_ran) {
+    // F8 goes through the session rather than the pipeline, so the panel has to
+    // adopt where the machine ended up instead of going blank.
+    Fixture fixture;
+    fixture.window.step_line();
+
+    auto* panel = fixture.window.findChild<PipelineWidget*>();
+    RV_CHECK(panel != nullptr);
+    RV_CHECK(has(panel->stage_summary(), "EX=addi"));
+    RV_CHECK(has(panel->stage_summary(), "ID=lui"));
+}
+
+RV_TEST(gui, the_pipeline_tab_is_selectable) {
+    Fixture fixture;
+    fixture.window.show_tab("Pipeline");
+    auto* panel = fixture.window.findChild<PipelineWidget*>();
+    RV_CHECK(panel != nullptr);
+    RV_CHECK(panel->isVisibleTo(&fixture.window));
 }

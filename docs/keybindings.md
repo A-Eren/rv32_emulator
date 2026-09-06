@@ -10,14 +10,22 @@ toolbar and in the **Run** menu, so nothing here has to be memorised first.
 | `F5` | Assemble | Assemble the buffer and load it |
 | `Ctrl+E` | Generate | Write `imem.mem` and `dmem.mem`, padded to this machine's depth |
 | `F8` | Step | One **source line**, entering calls |
-| `F7` | Step Instr | One **machine instruction** — this is where a pseudo-instruction shows its two halves |
+| `F7` | Step Cycle | One **pipeline cycle**. An instruction commits when it reaches EX, so from a standing start the first one takes three presses |
 | `F10` | Step Over | One source line, running calls to completion |
 | `F9` | Run | Run until something stops it. Pressing it again interrupts |
 | `F6` | Back | Step **backwards** one source line |
+| `Shift+F7` | Back Cycle | Undo one pipeline cycle, including whatever it committed |
 | `F4` | Reset | Restart the machine, keeping breakpoints |
 
 The status bar shows `[1/2]` when the pc is inside a multi-instruction
-pseudo-instruction — that is how `li a0, 0x12345` stops being a mystery.
+pseudo-instruction — that is how `li a0, 0x12345` stops being a mystery. It is
+still where a pseudo-instruction shows its two halves: cycle stepping reaches
+the seam just the same, it simply takes a cycle to get there.
+
+`Step`, `Step Over` and `Run` move the machine a whole instruction at a time and
+the pipeline adopts wherever they leave it — which is with the pipe full, since
+that is how the machine really left it. Only `Step Cycle` walks it a stage at a
+time.
 
 `Back` greys out when there is no history left to undo.
 
@@ -98,10 +106,24 @@ broken edit never destroys the program you are already stepping.
 |---|---|
 | Registers | Both spellings (`x10  a0`), zeros dimmed, and the register the last step wrote highlighted **and scrolled into view** |
 | Encoding | The instruction as labelled bitfields, and what it did. A compressed instruction is drawn at 16 bits, with the base instruction it expands to underneath. Follows the caret, so a line explains itself before it has ever run |
+| Pipeline | The five stages — `IF ID EX MEM WB` — with the instruction in each, and underneath them the space-time diagram: one row per instruction, one column per cycle. Each stage keeps its own colour. A branch that goes the other way leaves its wrong-path fetch stopped partway across the diagram, which is what a flush looks like |
 | Memory | Data memory, as deep as it actually is, with the two memory sizes above it — this table is what they are a view of. **Editable**: type a hex value into a cell. `Load .mem…` and `Export .mem…` move the whole image in and out |
 | Devices | What is attached, name and type in columns of their own, with each device's controls below. Select a block and its contents appear as memory, with its own `.mem` in and out. **Double-click a name to rename it** |
 | Console | Whatever the program sent to the UART |
 | Symbols | Every symbol with the **space** it lives in — the thing that explains why `call msg` was rejected |
+
+### The pipeline is a picture, not a timing model
+
+The machine underneath executes one instruction atomically, and `mcycle`,
+`cycle` and `time` still count instructions — the timer fires exactly when it
+did before. The panel has its own cycle count, shown in its top right, and it
+is deliberately not the same number as the one in the status bar: a cycle spent
+filling the pipe is not a cycle the machine experienced.
+
+There are no hazards, no stalls and no forwarding yet, and no branch
+prediction: the front-end fetches straight past a branch, and when the branch
+resolves the other way the two instructions behind it are discarded. That is
+enough to draw the picture honestly and no more.
 
 ## The command-line debugger
 

@@ -73,6 +73,7 @@ add_library(rv_dbg STATIC
     src/dbg/history.cpp
     src/dbg/breakpoints.cpp
     src/dbg/session.cpp
+    src/dbg/pipeline.cpp
 )
 target_link_libraries(rv_dbg PUBLIC rv_asm)
 rv_set_warnings(rv_dbg)
@@ -115,6 +116,7 @@ if(Qt6_FOUND)
         src/gui/device_panel.cpp
         src/gui/editor_widget.cpp
         src/gui/encoding_widget.cpp
+        src/gui/pipeline_widget.cpp
         src/gui/highlighter.cpp
     )
     target_link_libraries(rv32-gui PRIVATE rv_cmd Qt6::Widgets)
@@ -130,6 +132,7 @@ if(Qt6_FOUND)
         src/gui/device_panel.cpp
         src/gui/editor_widget.cpp
         src/gui/encoding_widget.cpp
+        src/gui/pipeline_widget.cpp
         src/gui/highlighter.cpp
     )
     target_link_libraries(rv_gui_tests PRIVATE rv_cmd Qt6::Widgets)
@@ -188,6 +191,7 @@ add_executable(rv_tests
     tests/unit_assembler.cpp
     tests/unit_complete.cpp
     tests/unit_session.cpp
+    tests/unit_pipeline.cpp
 )
 target_link_libraries(rv_tests PRIVATE rv_cmd)
 target_include_directories(rv_tests PRIVATE tests)
@@ -195,7 +199,7 @@ rv_set_warnings(rv_tests)
 
 # One CTest entry per suite, so a failure can be re-run in isolation.
 foreach(suite fields decode expand roundtrip exec_alu exec_mem exec_branch exec_m exec_coverage csr_trap interrupt memfile devices
-              lexer diag_render assembler complete session)
+              lexer diag_render assembler complete session pipeline)
     add_test(NAME unit.${suite} COMMAND rv_tests --filter=${suite})
 endforeach()
 

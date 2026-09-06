@@ -12,6 +12,7 @@
 #include <memory>
 
 #include "asm/diagnostic.hpp"
+#include "dbg/pipeline.hpp"
 #include "dbg/session.hpp"
 
 class QAction;
@@ -28,6 +29,7 @@ namespace rv::gui {
 
 class EditorWidget;
 class EncodingWidget;
+class PipelineWidget;
 class DevicePanel;
 
 class MainWindow final : public QMainWindow {
@@ -59,7 +61,8 @@ public:
     // would, rather than reaching into its internals.
     void assemble();
     void step_line();
-    void step_instruction();
+    void step_cycle();
+    void step_back_cycle();
     void step_over();
     void run();
     void step_back();
@@ -108,11 +111,17 @@ private:
     void refresh_symbols();
     void refresh_diagnostics();
     void refresh_status();
+    /// Step the machine through the session, then let the pipeline adopt
+    /// wherever it landed.
+    void step_through_session(dbg::StepKind kind);
     void report_stop(const dbg::StopEvent& event);
     void set_message(const QString& text, bool is_error = false);
     bool confirm_discard();
 
     std::unique_ptr<dbg::DebugSession> session_;
+    /// The five-stage picture of that session. A view of the machine, not a
+    /// second machine: it commits through the session like everything else.
+    dbg::Pipeline pipeline_model_;
     /// Diagnostics from the last assemble *attempt*, successful or not. A
     /// failed attempt never reaches the session -- that is deliberate, so a
     /// broken edit cannot destroy the loaded program -- so its errors have to
@@ -121,6 +130,7 @@ private:
 
     EditorWidget* editor_ = nullptr;
     EncodingWidget* encoding_ = nullptr;
+    PipelineWidget* pipeline_ = nullptr;
     QTableWidget* registers_ = nullptr;
     QTableWidget* memory_ = nullptr;
     QComboBox* imem_size_ = nullptr;
