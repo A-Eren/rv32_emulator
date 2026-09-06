@@ -69,7 +69,7 @@ jobs:
           # Again with the pipeline panel on screen and enough cycles for the
           # loop to flush a branch, because a panel only paints when it is the
           # visible tab -- a frame that never draws it proves nothing about it.
-          $gui examples/fib.s --screenshot /tmp/rv32-pipeline.png --cycles 32 --tab Pipeline
+          $gui examples/fib.s --screenshot /tmp/rv32-pipeline.png --steps 32 --tab Pipeline
           test -s /tmp/rv32-pipeline.png
 
   # -------------------------------------------------------------------------

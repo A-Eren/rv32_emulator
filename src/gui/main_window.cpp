@@ -262,13 +262,9 @@ void MainWindow::build_actions() {
     add("Generate", QKeySequence("Ctrl+E"), &MainWindow::on_export_mem,
         "Write imem.mem and dmem.mem, padded to this machine's depth");
     toolbar->addSeparator();
-    add("Step", Qt::Key_F8, &MainWindow::step_line, "One source line, entering calls");
-    add("Step Cycle", Qt::Key_F7, &MainWindow::step_cycle,
+    add("Step", Qt::Key_F8, &MainWindow::step,
         "One pipeline cycle — an instruction takes effect when it reaches WB");
-    add("Step Over", Qt::Key_F10, &MainWindow::step_over, "One source line, running calls");
-    action_back_ = add("Back", Qt::Key_F6, &MainWindow::step_back, "Undo one source line");
-    add("Back Cycle", QKeySequence("Shift+F7"), &MainWindow::step_back_cycle,
-        "Undo one pipeline cycle");
+    action_back_ = add("Back", Qt::Key_F6, &MainWindow::step_back, "Undo one pipeline cycle");
     add("Run", Qt::Key_F9, &MainWindow::run, "Run until something stops it");
     add("Reset", Qt::Key_F4, &MainWindow::reset_machine, "Restart, keeping breakpoints");
 
@@ -502,23 +498,13 @@ void MainWindow::report_stop(const dbg::StopEvent& event) {
     refresh_all();
 }
 
-// Everything but Step Cycle moves the machine through the session and then
-// tells the pipeline to adopt where it ended up. Re-deriving what "one source
-// line" means on top of cycles would mean a second copy of the stop rules --
-// breakpoints, watchpoints, the call-depth heuristic -- and two copies is
-// exactly what this program does not have anywhere else.
-void MainWindow::step_line() { step_through_session(dbg::StepKind::Line); }
-void MainWindow::step_over() { step_through_session(dbg::StepKind::LineOver); }
+// One step, and it is a cycle. A source line, a call, a whole program are all
+// some number of these -- there is nothing a separate control would express
+// that holding this one down does not, and every extra button was a second way
+// to ask the same question.
+void MainWindow::step() { report_stop(pipeline_model_.tick()); }
 
-void MainWindow::step_through_session(dbg::StepKind kind) {
-    const dbg::StopEvent event = session_->step(kind);
-    pipeline_model_.resync();
-    report_stop(event);
-}
-
-void MainWindow::step_cycle() { report_stop(pipeline_model_.tick()); }
-
-void MainWindow::step_back_cycle() {
+void MainWindow::step_back() {
     if (!pipeline_model_.reverse_tick()) {
         set_message("no further history: this pipeline has not run a cycle yet", true);
         return;
@@ -526,16 +512,6 @@ void MainWindow::step_back_cycle() {
     // Going back is never itself a reason to stop, so there is no event to
     // report -- a plain Step is what clears the message and repaints.
     report_stop(dbg::StopEvent{});
-}
-
-void MainWindow::step_back() {
-    if (!session_->can_reverse()) {
-        set_message("no further history", true);
-        return;
-    }
-    const dbg::StopEvent event = session_->reverse_step(dbg::StepKind::Line);
-    pipeline_model_.resync();
-    report_stop(event);
 }
 
 void MainWindow::run() {
@@ -605,7 +581,7 @@ void MainWindow::refresh_all() {
     editor_->set_breakpoint_lines(std::move(breakpoints));
     editor_->set_execution_line(static_cast<int>(session_->current_line().value_or(0)));
 
-    action_back_->setEnabled(session_->can_reverse());
+    action_back_->setEnabled(pipeline_model_.can_reverse());
     refresh_pipeline_marks();
     encoding_->update();
     pipeline_->update();

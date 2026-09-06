@@ -60,12 +60,12 @@ public:
     // Exposed so the offscreen tests can drive the window the way a person
     // would, rather than reaching into its internals.
     void assemble();
-    void step_line();
-    void step_cycle();
-    void step_back_cycle();
-    void step_over();
-    void run();
+    /// One pipeline cycle forward, and one back. The only two there are: a
+    /// cycle is the machine's real granularity now, and a source line or a
+    /// call is a number of them rather than a separate kind of stepping.
+    void step();
     void step_back();
+    void run();
     void reset_machine();
     void toggle_breakpoint(int line);
 
@@ -122,9 +122,6 @@ private:
     void refresh_diagnostics();
     void refresh_status();
     void refresh_pipeline_marks();
-    /// Step the machine through the session, then let the pipeline adopt
-    /// wherever it landed.
-    void step_through_session(dbg::StepKind kind);
     void report_stop(const dbg::StopEvent& event);
     void set_message(const QString& text, bool is_error = false);
     bool confirm_discard();

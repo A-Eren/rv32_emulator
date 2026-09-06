@@ -9,25 +9,28 @@ toolbar and in the **Run** menu, so nothing here has to be memorised first.
 |---|---|---|
 | `F5` | Assemble | Assemble the buffer and load it |
 | `Ctrl+E` | Generate | Write `imem.mem` and `dmem.mem`, padded to this machine's depth |
-| `F8` | Step | One **source line**, entering calls |
-| `F7` | Step Cycle | One **pipeline cycle**. An instruction is written back when it reaches WB, so from a standing start the first one takes five presses |
-| `F10` | Step Over | One source line, running calls to completion |
+| `F8` | Step | One **pipeline cycle**. An instruction is written back when it reaches WB, so from a standing start the first one takes five presses |
+| `F6` | Back | Undo one pipeline cycle, including whatever it committed |
 | `F9` | Run | Run until something stops it. Pressing it again interrupts |
-| `F6` | Back | Step **backwards** one source line |
-| `Shift+F7` | Back Cycle | Undo one pipeline cycle, including whatever it committed |
 | `F4` | Reset | Restart the machine, keeping breakpoints |
 
-The status bar shows `[1/2]` when the pc is inside a multi-instruction
-pseudo-instruction — that is how `li a0, 0x12345` stops being a mystery. It is
-still where a pseudo-instruction shows its two halves: cycle stepping reaches
-the seam just the same, it simply takes a cycle to get there.
+**One step, and it is a cycle.** A source line, a call, a whole program are all
+some number of cycles; there was nothing a second stepping control expressed
+that holding this one down does not, and each extra button was another way to
+ask the same question. `Back` is its mirror: one cycle, undoing whatever that
+cycle committed.
 
-`Step`, `Step Over` and `Run` move the machine a whole instruction at a time and
-the pipeline adopts wherever they leave it — which is with the pipe full, since
-that is how the machine really left it. Only `Step Cycle` walks it a stage at a
-time.
+Two consequences worth knowing. Landing inside a multi-instruction
+pseudo-instruction happens on its own now — the status bar shows `[1/2]`, which
+is how `li a0, 0x12345` stops being a mystery — and stepping *over* a call means
+`Run` with a breakpoint after it. The command-line debugger still has `next` and
+`finish` if you want a source line at a time.
 
-`Back` greys out when there is no history left to undo.
+`Run` is the one thing that still moves the machine a whole instruction at a
+time; the pipeline adopts wherever it leaves it, which is with the pipe full,
+since that is how the machine really left it.
+
+`Back` greys out when there is no cycle left to undo.
 
 ## Writing assembly
 
