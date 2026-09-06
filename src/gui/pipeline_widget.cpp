@@ -37,6 +37,12 @@ const QColor kBackground(0x1e, 0x21, 0x27);
 
 constexpr std::size_t index_of(Stage stage) { return static_cast<std::size_t>(stage); }
 
+/// How many cycles the space-time diagram looks back. Wide enough to hold a
+/// whole instruction's five stages twice over, which is as far back as anything
+/// on screen is still being reasoned about -- filling the panel's full width
+/// just pushed the interesting end of the run away from the eye.
+constexpr int kDiagramCycles = 10;
+
 constexpr Stage kStages[kNumStages] = {Stage::IF, Stage::ID, Stage::EX, Stage::MEM, Stage::WB};
 
 QString spelling(const dbg::Pipeline& pipeline, Stage stage) {
@@ -203,7 +209,7 @@ void PipelineWidget::draw_diagram(QPainter& painter, int y) {
     const int room = width() - left - label_width - 8;
     if (room < column_width) return;
 
-    const int max_columns = room / column_width;
+    const int max_columns = std::min(kDiagramCycles, room / column_width);
     const int max_rows = std::max(1, (height() - y - line_height) / line_height - 1);
 
     // The cycles that fit, newest last. The first record is where the pipe
