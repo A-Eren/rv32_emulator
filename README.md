@@ -12,10 +12,10 @@ serves four questions:
 3. **Why did it not assemble?** — line, column, caret, and a suggested fix
 4. **Where is each instruction right now?** — the five pipeline stages with the
    instruction in each, the space-time diagram underneath, and the same five
-   stages named in the editor margin beside the code, with the line that has
-   just finished in yellow and a branch in green or red once it has reached EX
-   and knows whether it was taken. Stepping by cycle rather than by instruction
-   is what makes a branch's cost visible
+   stages named in the editor margin beside the code, with the line being
+   written back in yellow and a branch in green or red once it knows whether it
+   was taken. Stepping by cycle rather than by instruction is what makes a
+   branch's cost visible
 
 The editor suggests the instruction in a small block under the caret that folds
 away once it is chosen, then greys the operands it still wants in after the caret — a form to
@@ -49,10 +49,11 @@ through what you wrote.
 | M9 | Pipeline view: five stages, space-time diagram | ✅ done |
 
 The pipeline is a picture of the machine, not a re-timing of it: instructions
-still execute atomically, `mcycle` still counts them, and the panel keeps its
-own cycle count. Hazards, stalls, forwarding and branch prediction are not
-implemented yet — the front-end fetches straight past a branch and discards
-what it fetched when the branch goes the other way.
+still execute atomically — the view runs each one on the cycle it reaches
+write-back — `mcycle` still counts instructions, and the panel keeps its own
+cycle count. Because a branch cannot resolve until it runs, the flush is four
+deep where real hardware resolving in EX would throw away two. Hazards, stalls,
+forwarding and branch prediction are not implemented yet.
 
 ## Building
 

@@ -46,44 +46,27 @@ void Pipeline::reset() {
 void Pipeline::resync() {
     start_over();
 
-    // Put back what the machine really has behind it. A step driven through the
-    // session ran whole instructions back to back, so a real pipe would be
-    // full behind the pc -- and the last three to commit are exactly what
-    // would still be in EX, MEM and WB. Recovering them from the recorded
-    // history is what keeps those two stages from sitting empty for anyone who
-    // never presses Step Cycle.
-    struct Behind {
-        std::size_t back;
-        Stage stage;
-    };
-    // Oldest first, so serial numbers still run in the order things were
-    // fetched.
-    static constexpr Behind kBehind[] = {{2, Stage::WB}, {1, Stage::MEM}, {0, Stage::EX}};
-
-    for (const Behind& behind : kBehind) {
-        const std::optional<RecentStep> ran = session_->recent_step(behind.back);
-        if (!ran.has_value()) continue;
-
-        Slot& slot = slots_[index_of(behind.stage)];
-        slot.valid = true;
-        slot.pc = ran->pc;
-        slot.raw = ran->raw;
-        slot.instr = isa::decode(ran->raw);
-        slot.serial = next_serial_++;
-        slot.committed = true;
-
-        // Where the pc went next: the instruction after this one, or the pc
-        // itself for the most recent. That is what says whether a branch here
-        // was taken.
-        const std::optional<RecentStep> next =
-            behind.back == 0 ? std::nullopt : session_->recent_step(behind.back - 1);
-        const Addr after = next.has_value() ? next->pc : session_->cpu().pc;
-        slot.redirected = after != slot.pc + slot.instr.length;
+    // Put back what the machine really has. Only one instruction has finished
+    // -- the one that just wrote back -- and behind it a real pipe would be
+    // full of the work already fetched, with the instruction at the pc four
+    // stages from retiring. Recovering that is what stops the later stages
+    // sitting empty for anyone who never presses Step Cycle.
+    if (const std::optional<RecentStep> ran = session_->recent_step(0); ran.has_value()) {
+        Slot& retired = slots_[index_of(Stage::WB)];
+        retired.valid = true;
+        retired.pc = ran->pc;
+        retired.raw = ran->raw;
+        retired.instr = isa::decode(ran->raw);
+        retired.serial = next_serial_++;
+        retired.committed = true;
+        retired.redirected = session_->cpu().pc != retired.pc + retired.instr.length;
     }
 
     fetch_pc_ = session_->cpu().pc;
     if (session_->has_program() && !session_->halted()) {
-        for (const Stage stage : {Stage::ID, Stage::IF}) {
+        // Nearest to retiring first, so the instruction at the pc lands in MEM
+        // and reaches write-back on the very next cycle.
+        for (const Stage stage : {Stage::MEM, Stage::EX, Stage::ID, Stage::IF}) {
             Slot& slot = slots_[index_of(stage)];
             slot = fetch(fetch_pc_);
             fetch_pc_ += slot.instr.length;
@@ -129,12 +112,16 @@ StopEvent Pipeline::tick() {
     u8 flushed = 0;
     bool committed = false;
 
+    // Write-back is where an instruction becomes part of the machine: the
+    // register file is written here, and this emulator does the whole
+    // instruction in one go, so this is the cycle it is run.
+    //
     // A halted machine still drains: what is already in flight keeps moving
     // along, it simply has nothing following it.
-    Slot& ex = slots_[index_of(Stage::EX)];
-    const bool runnable = ex.valid && session_->has_program() && !session_->halted();
+    Slot& retiring = slots_[index_of(Stage::WB)];
+    const bool runnable = retiring.valid && session_->has_program() && !session_->halted();
 
-    if (runnable && ex.pc != session_->cpu().pc) {
+    if (runnable && retiring.pc != session_->cpu().pc) {
         // The machine moved without going through here. Rather than run an
         // instruction the pc has left behind, adopt where it actually is.
         resync();
@@ -144,19 +131,18 @@ StopEvent Pipeline::tick() {
     if (runnable) {
         // The front-end only ever runs ahead sequentially, and every redirect
         // discards what was fetched behind it, so the instruction arriving here
-        // is the one the machine is about to run. This is where the whole
-        // instruction happens: fetch, decode, execute and commit, all of it.
-        const Addr sequential = ex.pc + ex.instr.length;
+        // is the one the machine is about to run.
+        const Addr sequential = retiring.pc + retiring.instr.length;
         event = session_->step(StepKind::Instruction);
         committed = true;
-        ex.committed = true;
+        retiring.committed = true;
+        retiring.redirected = session_->cpu().pc != sequential;
 
-        ex.redirected = session_->cpu().pc != sequential;
-        if (ex.redirected) {
+        if (retiring.redirected) {
             // A taken branch, a jump, a trap or an interrupt -- they all look
             // the same from here, which is why none of them needs its own case.
-            // Whatever was fetched behind this was on the path not taken.
-            for (const Stage stage : {Stage::ID, Stage::IF}) {
+            // Everything still in the pipe was fetched on the path not taken.
+            for (const Stage stage : {Stage::MEM, Stage::EX, Stage::ID, Stage::IF}) {
                 if (slots_[index_of(stage)].valid) ++flushed;
                 slots_[index_of(stage)] = Slot{};
             }
@@ -165,8 +151,8 @@ StopEvent Pipeline::tick() {
     }
 
     // Fetch, unless the machine has stopped for good. A breakpoint still
-    // fetches: the instruction it guards belongs in IF, fetched and not run,
-    // which is exactly where the machine is standing.
+    // fetches: the instruction it guards belongs in the pipe, fetched and not
+    // run, which is exactly where the machine is standing.
     if (session_->has_program() && !session_->halted()) {
         Slot& fetched = slots_[index_of(Stage::IF)];
         fetched = fetch(fetch_pc_);

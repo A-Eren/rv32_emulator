@@ -50,7 +50,7 @@ const char* const kStraightLine =
 
 RV_TEST(pipeline, the_pipe_fills_before_anything_commits) {
     // The point of the whole panel: an instruction is not finished the moment
-    // it is fetched. Two cycles in, the machine has not moved at all.
+    // it is fetched. Four cycles in, the machine has not moved at all.
     DebugSession session = make_session(kStraightLine);
     Pipeline pipeline(session);
 
@@ -61,13 +61,15 @@ RV_TEST(pipeline, the_pipe_fills_before_anything_commits) {
     RV_CHECK_STR(spelling(pipeline, Stage::IF), "addi");
     RV_CHECK_EQ(session.cpu().instret, 0u);
 
-    pipeline.tick();
+    for (int i = 0; i < 3; ++i) pipeline.tick();
+    RV_CHECK_STR(spelling(pipeline, Stage::MEM), "addi");
     RV_CHECK_EQ(session.cpu().instret, 0u);
     RV_CHECK_HEX(session.cpu().pc, 0u);
 
-    // Third cycle: it reaches EX, and everything about it happens at once.
+    // Fifth cycle: it reaches write-back, and that is where it becomes part of
+    // the machine.
     pipeline.tick();
-    RV_CHECK_STR(spelling(pipeline, Stage::EX), "addi");
+    RV_CHECK_STR(spelling(pipeline, Stage::WB), "addi");
     RV_CHECK_EQ(session.cpu().instret, 1u);
     RV_CHECK_HEX(session.cpu().x[10], 1u);
 }
@@ -106,9 +108,8 @@ RV_TEST(pipeline, a_bubble_has_no_spelling) {
 }
 
 RV_TEST(pipeline, a_taken_branch_discards_what_was_fetched_behind_it) {
-    // The front-end fetches straight through, so by the time the branch
-    // resolves at EX the instruction behind it is already in the pipe -- and
-    // on the wrong path.
+    // The front-end fetches straight through, so by the time the branch reaches
+    // write-back everything behind it is on the wrong path.
     DebugSession session = make_session(
         "        addi a0, x0, 0\n"
         "        beq  a0, x0, target\n"
@@ -119,12 +120,14 @@ RV_TEST(pipeline, a_taken_branch_discards_what_was_fetched_behind_it) {
         "        ebreak\n");
     Pipeline pipeline(session);
 
-    // Four cycles: fill, fill, addi commits, beq commits.
-    for (int i = 0; i < 4; ++i) pipeline.tick();
+    // Six cycles: four to fill, then the addi retires, then the beq.
+    for (int i = 0; i < 6; ++i) pipeline.tick();
 
-    RV_CHECK_STR(spelling(pipeline, Stage::EX), "beq");
+    RV_CHECK_STR(spelling(pipeline, Stage::WB), "beq");
+    RV_CHECK(!pipeline.at(Stage::MEM).valid);
+    RV_CHECK(!pipeline.at(Stage::EX).valid);
     RV_CHECK(!pipeline.at(Stage::ID).valid);
-    RV_CHECK_EQ(pipeline.last_flushed(), u8{1});
+    RV_CHECK_EQ(pipeline.last_flushed(), u8{3});
 
     // And the next fetch comes from the target, not from where it was walking.
     const auto target = session.lookup_symbol("target");
@@ -132,9 +135,10 @@ RV_TEST(pipeline, a_taken_branch_discards_what_was_fetched_behind_it) {
     RV_CHECK(pipeline.at(Stage::IF).valid);
     RV_CHECK_HEX(pipeline.at(Stage::IF).pc, *target);
 
-    // The wrong-path instruction never ran.
+    // The wrong-path instructions never ran.
     run_out(pipeline, session);
     RV_CHECK_HEX(session.cpu().x[11], 0u);
+    RV_CHECK_HEX(session.cpu().x[12], 0u);
     RV_CHECK_HEX(session.cpu().x[13], 7u);
 }
 
@@ -147,12 +151,12 @@ RV_TEST(pipeline, a_branch_that_falls_through_keeps_the_pipe_full) {
         "        ebreak\n");
     Pipeline pipeline(session);
 
-    for (int i = 0; i < 4; ++i) pipeline.tick();
+    for (int i = 0; i < 6; ++i) pipeline.tick();
 
-    RV_CHECK_STR(spelling(pipeline, Stage::EX), "beq");
+    RV_CHECK_STR(spelling(pipeline, Stage::WB), "beq");
     RV_CHECK_EQ(pipeline.last_flushed(), u8{0});
-    RV_CHECK(pipeline.at(Stage::ID).valid);
-    RV_CHECK_STR(spelling(pipeline, Stage::ID), "addi");
+    RV_CHECK(pipeline.at(Stage::MEM).valid);
+    RV_CHECK_STR(spelling(pipeline, Stage::MEM), "addi");
 }
 
 RV_TEST(pipeline, ticking_leaves_exactly_the_machine_that_stepping_does) {
@@ -203,22 +207,19 @@ RV_TEST(pipeline, reverse_tick_undoes_the_commit_and_the_slots) {
     DebugSession session = make_session(kStraightLine);
     Pipeline pipeline(session);
 
-    pipeline.tick();
-    pipeline.tick();
-    pipeline.tick();
+    for (int i = 0; i < 5; ++i) pipeline.tick();
     RV_CHECK_EQ(session.cpu().instret, 1u);
     RV_CHECK_HEX(session.cpu().x[10], 1u);
 
     RV_CHECK(pipeline.reverse_tick());
     RV_CHECK_EQ(session.cpu().instret, 0u);
     RV_CHECK_HEX(session.cpu().x[10], 0u);
-    RV_CHECK_EQ(pipeline.ticks(), 2u);
-    // Back to the cycle where it had only been decoded.
-    RV_CHECK(!pipeline.at(Stage::EX).valid);
-    RV_CHECK_STR(spelling(pipeline, Stage::ID), "addi");
+    RV_CHECK_EQ(pipeline.ticks(), 4u);
+    // Back to the cycle before it wrote back.
+    RV_CHECK(!pipeline.at(Stage::WB).valid);
+    RV_CHECK_STR(spelling(pipeline, Stage::MEM), "addi");
 
-    RV_CHECK(pipeline.reverse_tick());
-    RV_CHECK(pipeline.reverse_tick());
+    for (int i = 0; i < 4; ++i) RV_CHECK(pipeline.reverse_tick());
     RV_CHECK(pipeline.drained());
     RV_CHECK(!pipeline.can_reverse());
     RV_CHECK(!pipeline.reverse_tick());
@@ -247,51 +248,52 @@ RV_TEST(pipeline, a_compressed_instruction_keeps_its_own_spelling) {
     RV_CHECK_STR(spelling(pipeline, Stage::IF), "c.li");
     RV_CHECK_EQ(pipeline.at(Stage::IF).instr.length, u8{2});
 
-    pipeline.tick();
-    pipeline.tick();
+    for (int i = 0; i < 4; ++i) pipeline.tick();
     RV_CHECK_HEX(session.cpu().x[10], 3u);
 }
 
-RV_TEST(pipeline, resync_puts_the_last_committed_instruction_in_ex) {
+RV_TEST(pipeline, resync_puts_the_last_committed_instruction_in_write_back) {
     // Stepping a whole source line goes through the session, not through here.
-    // The picture afterwards should say what just ran and what is next, rather
-    // than going blank.
+    // The picture afterwards should say what just finished and what is coming,
+    // rather than going blank.
     DebugSession session = make_session(kStraightLine);
     Pipeline pipeline(session);
 
     session.step(StepKind::Instruction);
     pipeline.resync();
 
-    RV_CHECK_STR(spelling(pipeline, Stage::EX), "addi");
-    RV_CHECK(pipeline.at(Stage::EX).committed);
-    RV_CHECK_HEX(pipeline.at(Stage::ID).pc, session.cpu().pc);
-    RV_CHECK_STR(spelling(pipeline, Stage::ID), "xor");
+    RV_CHECK_STR(spelling(pipeline, Stage::WB), "addi");
+    RV_CHECK(pipeline.at(Stage::WB).committed);
+    // The instruction at the pc is one cycle from retiring.
+    RV_CHECK_HEX(pipeline.at(Stage::MEM).pc, session.cpu().pc);
+    RV_CHECK_STR(spelling(pipeline, Stage::MEM), "xor");
+    RV_CHECK_STR(spelling(pipeline, Stage::EX), "sll");
     RV_CHECK_EQ(pipeline.ticks(), 0u);
 
     // And the next cycle runs the instruction the pc is actually on.
     pipeline.tick();
-    RV_CHECK_STR(spelling(pipeline, Stage::EX), "xor");
+    RV_CHECK_STR(spelling(pipeline, Stage::WB), "xor");
     RV_CHECK_EQ(session.cpu().instret, 2u);
 }
 
 RV_TEST(pipeline, the_diagram_records_a_row_per_cycle) {
     DebugSession session = make_session(kStraightLine);
     Pipeline pipeline(session);
-    for (int i = 0; i < 3; ++i) pipeline.tick();
+    for (int i = 0; i < 5; ++i) pipeline.tick();
 
     // The first entry is where the pipe started; then one per cycle.
-    RV_CHECK_EQ(pipeline.history().size(), std::size_t{4});
+    RV_CHECK_EQ(pipeline.history().size(), std::size_t{6});
     RV_CHECK_EQ(pipeline.history().front().tick, 0u);
-    RV_CHECK_EQ(pipeline.history().back().tick, 3u);
-    RV_CHECK(pipeline.history().back().committed);
+    RV_CHECK_EQ(pipeline.history().back().tick, 5u);
+    RV_CHECK(pipeline.history().back().committed);   // the fifth cycle retired one
     RV_CHECK(!pipeline.history().front().committed);
 }
 
-RV_TEST(pipeline, resync_rebuilds_the_stages_behind_the_pc) {
-    // The bug this guards. A step driven through the session used to leave MEM
-    // and WB empty, so anyone who drove with Step or Run rather than Step Cycle
-    // never saw those two stages at all. The machine really did have three
-    // instructions behind the pc; the view just was not asking.
+RV_TEST(pipeline, resync_rebuilds_the_stages_around_the_pc) {
+    // The bug this guards. A step driven through the session used to leave the
+    // later stages empty, so anyone who drove with Step or Run rather than Step
+    // Cycle never saw them. A real pipe is full at that moment; the view just
+    // was not asking.
     DebugSession session = make_session(
         "        addi a0, x0, 1\n"
         "        xor  a1, a0, a0\n"
@@ -300,30 +302,30 @@ RV_TEST(pipeline, resync_rebuilds_the_stages_behind_the_pc) {
         "        ebreak\n");
     Pipeline pipeline(session);
 
-    for (int i = 0; i < 3; ++i) session.step(StepKind::Instruction);
+    for (int i = 0; i < 2; ++i) session.step(StepKind::Instruction);
     pipeline.resync();
 
-    RV_CHECK_STR(spelling(pipeline, Stage::WB), "addi");  // oldest of the three
-    RV_CHECK_STR(spelling(pipeline, Stage::MEM), "xor");
-    RV_CHECK_STR(spelling(pipeline, Stage::EX), "sll");   // the one that just ran
-    RV_CHECK_STR(spelling(pipeline, Stage::ID), "or");    // and what is next
-    RV_CHECK_STR(spelling(pipeline, Stage::IF), "ebreak");
+    RV_CHECK_STR(spelling(pipeline, Stage::WB), "xor");   // the one that just retired
+    RV_CHECK_STR(spelling(pipeline, Stage::MEM), "sll");  // and it is at the pc
+    RV_CHECK_HEX(pipeline.at(Stage::MEM).pc, session.cpu().pc);
+    RV_CHECK_STR(spelling(pipeline, Stage::EX), "or");
+    RV_CHECK_STR(spelling(pipeline, Stage::ID), "ebreak");
+    RV_CHECK(pipeline.at(Stage::IF).valid);
 }
 
-RV_TEST(pipeline, resync_fills_only_as_far_back_as_the_history_goes) {
+RV_TEST(pipeline, resync_leaves_write_back_empty_when_nothing_has_run) {
     DebugSession session = make_session(kStraightLine);
     Pipeline pipeline(session);
 
-    session.step(StepKind::Instruction);
     pipeline.resync();
 
-    RV_CHECK_STR(spelling(pipeline, Stage::EX), "addi");
-    RV_CHECK(!pipeline.at(Stage::MEM).valid);
-    RV_CHECK(!pipeline.at(Stage::WB).valid);
+    RV_CHECK(!pipeline.at(Stage::WB).valid);  // nothing has retired yet
+    RV_CHECK_STR(spelling(pipeline, Stage::MEM), "addi");
+    RV_CHECK_HEX(pipeline.at(Stage::MEM).pc, session.cpu().pc);
 }
 
 RV_TEST(pipeline, resync_recovers_which_way_a_branch_went) {
-    // Rebuilding the stages behind the pc has to rebuild the branch decision
+    // Rebuilding the stage behind the pc has to rebuild the branch decision
     // too, or a branch would lose its colour the moment you pressed Step.
     DebugSession session = make_session(
         "        addi a0, x0, 0\n"
@@ -334,10 +336,9 @@ RV_TEST(pipeline, resync_recovers_which_way_a_branch_went) {
         "        ebreak\n");
     Pipeline pipeline(session);
 
-    for (int i = 0; i < 3; ++i) session.step(StepKind::Instruction);
+    for (int i = 0; i < 2; ++i) session.step(StepKind::Instruction);
     pipeline.resync();
 
-    RV_CHECK_STR(spelling(pipeline, Stage::MEM), "beq");
-    RV_CHECK(pipeline.at(Stage::MEM).redirected);
-    RV_CHECK(!pipeline.at(Stage::EX).redirected);  // the addi it landed on
+    RV_CHECK_STR(spelling(pipeline, Stage::WB), "beq");
+    RV_CHECK(pipeline.at(Stage::WB).redirected);
 }

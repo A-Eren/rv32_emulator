@@ -264,7 +264,7 @@ void MainWindow::build_actions() {
     toolbar->addSeparator();
     add("Step", Qt::Key_F8, &MainWindow::step_line, "One source line, entering calls");
     add("Step Cycle", Qt::Key_F7, &MainWindow::step_cycle,
-        "One pipeline cycle — an instruction commits when it reaches EX");
+        "One pipeline cycle — an instruction takes effect when it reaches WB");
     add("Step Over", Qt::Key_F10, &MainWindow::step_over, "One source line, running calls");
     action_back_ = add("Back", Qt::Key_F6, &MainWindow::step_back, "Undo one source line");
     add("Back Cycle", QKeySequence("Shift+F7"), &MainWindow::step_back_cycle,
@@ -315,8 +315,9 @@ void MainWindow::set_branch_colours(bool on) {
 namespace {
 
 /// What a slot says about itself in colour. Yellow unless it is a branch or a
-/// jump that has already run: only at EX does the machine know which way it
-/// went, so only from EX onward is there anything to claim.
+/// jump that has already run. Real hardware resolves the condition in EX, but
+/// this emulator executes a whole instruction at once, and that happens at
+/// write-back -- so write-back is the first cycle there is anything to claim.
 PipelineTone tone_of(const dbg::Slot& slot) {
     if (!slot.committed || !slot.instr.valid()) return PipelineTone::Pending;
     const isa::InstrGroup group = slot.instr.desc().group;
@@ -333,6 +334,7 @@ PipelineTone tone_of(const dbg::Slot& slot) {
 // Strictly by stage: a line shows its *most advanced* instruction. The stages
 // decide, and the line is only where they happen to be drawn -- so when a
 // two-word pseudo-instruction straddles ID and EX, the line is at EX, because
+// that is the furthest the pipe has got on it -- see below, where
 // that is where the pipeline has got to on it.
 void MainWindow::refresh_pipeline_marks() {
     if (!pipeline_colours_) {

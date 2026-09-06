@@ -10,7 +10,7 @@ toolbar and in the **Run** menu, so nothing here has to be memorised first.
 | `F5` | Assemble | Assemble the buffer and load it |
 | `Ctrl+E` | Generate | Write `imem.mem` and `dmem.mem`, padded to this machine's depth |
 | `F8` | Step | One **source line**, entering calls |
-| `F7` | Step Cycle | One **pipeline cycle**. An instruction commits when it reaches EX, so from a standing start the first one takes three presses |
+| `F7` | Step Cycle | One **pipeline cycle**. An instruction is written back when it reaches WB, so from a standing start the first one takes five presses |
 | `F10` | Step Over | One source line, running calls to completion |
 | `F9` | Run | Run until something stops it. Pressing it again interrupts |
 | `F6` | Back | Step **backwards** one source line |
@@ -133,9 +133,11 @@ of shades to rank by eye:
 - **The line that has just finished** — the one in write-back — in yellow.
   There is only ever one.
 - **A branch that has resolved**, green if it was taken and red if it fell
-  through. Only from EX onward, because that is the first cycle the machine has
-  an answer; before that a branch is marked like anything else, since claiming
-  to know earlier would be a prediction and there is no predictor here.
+  through. Only at write-back: real hardware resolves the condition in EX, but
+  this emulator runs a whole instruction at once and that happens at WB, so WB
+  is the first cycle there is an answer to show. Before that a branch is marked
+  like anything else — claiming to know earlier would be a prediction, and there
+  is no predictor here.
 
 The marking follows the stages, not the source. A line holding a two-word
 pseudo-instruction like `li a0, 0x12345` shows its *most advanced* instruction:
@@ -155,16 +157,30 @@ The panel is unaffected by either.
 
 ### The pipeline is a picture, not a timing model
 
-The machine underneath executes one instruction atomically, and `mcycle`,
-`cycle` and `time` still count instructions — the timer fires exactly when it
-did before. The panel has its own cycle count, shown in its top right, and it
-is deliberately not the same number as the one in the status bar: a cycle spent
-filling the pipe is not a cycle the machine experienced.
+The stages mean what they mean everywhere else: **IF** fetches, **ID** decodes
+and reads the registers, **EX** is the ALU, **MEM** is the data access, and
+**WB** writes the register file.
 
-There are no hazards, no stalls and no forwarding yet, and no branch
-prediction: the front-end fetches straight past a branch, and when the branch
-resolves the other way the two instructions behind it are discarded. That is
-enough to draw the picture honestly and no more.
+Underneath, though, the machine has no pipeline: `Hart::step()` fetches,
+decodes, executes and commits one instruction in a single call. The view runs
+that call the cycle the instruction reaches **write-back**, because that is
+where an instruction becomes part of the machine — so the register and memory
+panels change on the cycle the pipeline says they should.
+
+The cost of doing it that way is the branch penalty. Real hardware resolves a
+branch condition in EX and throws away the two instructions behind it; here the
+answer does not exist until the instruction runs at WB, so four are thrown away
+instead. The picture is right about *what* happens in each stage and about the
+order; it overstates what a mispredicted branch costs.
+
+`mcycle`, `cycle` and `time` still count instructions, and the timer fires
+exactly when it did before. The panel keeps its own cycle count, shown in its
+top right, and it is deliberately not the same number as the one in the status
+bar: a cycle spent filling the pipe is not a cycle the machine experienced.
+
+There are no hazards, no stalls and no forwarding, and no branch prediction: the
+front-end fetches straight past a branch and discards what it fetched when the
+branch goes the other way.
 
 ## The command-line debugger
 

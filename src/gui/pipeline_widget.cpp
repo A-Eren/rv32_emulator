@@ -159,17 +159,26 @@ int PipelineWidget::draw_strip(QPainter& painter, int y) {
         }
     }
 
-    // EX is the one stage that is not decoration: this is where the register
-    // file, memory and the pc actually change.
-    const QRect ex(left + static_cast<int>(index_of(Stage::EX)) * cell_width, y, cell_width,
+    // Write-back is the stage that is not decoration: this is where an
+    // instruction becomes part of the machine.
+    const int strip_width = cell_width * static_cast<int>(kNumStages);
+    const QRect wb(left + static_cast<int>(index_of(Stage::WB)) * cell_width, y, cell_width,
                    box_height);
-    painter.setPen(kStageColour[index_of(Stage::EX)]);
-    painter.drawRect(ex.left(), ex.top(), ex.width(), ex.height());
+    painter.setPen(kStageColour[index_of(Stage::WB)]);
+    painter.drawRect(wb.left(), wb.top(), wb.width(), wb.height());
     painter.setPen(kDimColour);
-    painter.drawText(QRect(ex.left() - cell_width, y + box_height + 2, cell_width * 3, line_height),
-                     Qt::AlignCenter, "↑ everything happens here");
+    painter.drawText(QRect(left, y + box_height + 2, strip_width, line_height),
+                     Qt::AlignRight | Qt::AlignVCenter, "the register file is written here ↑");
+    y += box_height + line_height + 4;
 
-    return y + box_height + line_height + 6;
+    // What each stage is for, because a five-letter abbreviation does not say
+    // it and this is a teaching tool.
+    painter.setPen(kDimColour);
+    painter.drawText(QRect(left, y, width() - left - 8, line_height),
+                     Qt::AlignLeft | Qt::AlignVCenter,
+                     "IF fetch · ID decode · EX ALU · MEM data memory · WB register write");
+
+    return y + line_height + 4;
 }
 
 void PipelineWidget::draw_diagram(QPainter& painter, int y) {

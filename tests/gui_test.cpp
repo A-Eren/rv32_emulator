@@ -1023,10 +1023,10 @@ RV_TEST(gui, the_pipeline_panel_names_the_stage_of_each_instruction) {
     RV_CHECK(has(panel->stage_summary(), "IF=addi"));
     RV_CHECK(has(panel->stage_summary(), "ID=-"));
 
-    // Three cycles in, the first instruction is in EX and has committed.
-    fixture.window.step_cycle();
-    fixture.window.step_cycle();
-    RV_CHECK(has(panel->stage_summary(), "EX=addi"));
+    // Five cycles in, the first instruction has reached write-back, which is
+    // where it becomes part of the machine.
+    for (int i = 0; i < 4; ++i) fixture.window.step_cycle();
+    RV_CHECK(has(panel->stage_summary(), "WB=addi"));
     RV_CHECK_EQ(fixture.session().cpu().instret, 1u);
     RV_CHECK_HEX(fixture.session().cpu().x[10], 1u);
 
@@ -1058,7 +1058,7 @@ RV_TEST(gui, the_pipeline_panel_draws_a_run_long_enough_to_flush) {
 
 RV_TEST(gui, back_cycle_undoes_one_cycle) {
     Fixture fixture;
-    for (int i = 0; i < 3; ++i) fixture.window.step_cycle();
+    for (int i = 0; i < 5; ++i) fixture.window.step_cycle();
     RV_CHECK_EQ(fixture.session().cpu().instret, 1u);
 
     fixture.window.step_back_cycle();
@@ -1066,8 +1066,8 @@ RV_TEST(gui, back_cycle_undoes_one_cycle) {
 
     auto* panel = fixture.window.findChild<PipelineWidget*>();
     RV_CHECK(panel != nullptr);
-    RV_CHECK(has(panel->stage_summary(), "EX=-"));
-    RV_CHECK(has(panel->stage_summary(), "ID=addi"));
+    RV_CHECK(has(panel->stage_summary(), "WB=-"));
+    RV_CHECK(has(panel->stage_summary(), "MEM=addi"));
 }
 
 RV_TEST(gui, a_source_line_step_leaves_the_pipeline_showing_what_just_ran) {
@@ -1078,8 +1078,8 @@ RV_TEST(gui, a_source_line_step_leaves_the_pipeline_showing_what_just_ran) {
 
     auto* panel = fixture.window.findChild<PipelineWidget*>();
     RV_CHECK(panel != nullptr);
-    RV_CHECK(has(panel->stage_summary(), "EX=addi"));
-    RV_CHECK(has(panel->stage_summary(), "ID=lui"));
+    RV_CHECK(has(panel->stage_summary(), "WB=addi"));
+    RV_CHECK(has(panel->stage_summary(), "MEM=lui"));
 }
 
 RV_TEST(gui, the_pipeline_tab_is_selectable) {
@@ -1140,16 +1140,13 @@ RV_TEST(gui, a_taken_branch_turns_its_line_green_once_it_resolves) {
         "        li   a1, 99\n"       // line 3
         "out:    ebreak\n");          // line 4
 
-    for (int i = 0; i < 3; ++i) fixture.window.step_cycle();
-    // Fetched and decoded, but a branch has no answer before EX, so the line
-    // claims nothing yet.
-    RV_CHECK_EQ(depth_of(fixture.editor(), 2), 1);
+    for (int i = 0; i < 5; ++i) fixture.window.step_cycle();
+    // In flight, but it has not run yet, so the line claims nothing.
+    RV_CHECK_EQ(depth_of(fixture.editor(), 2), 3);
     RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::Pending);
 
-    fixture.window.step_cycle();  // resolves in EX
-    RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::Taken);
-    // And it keeps saying so as it drains through MEM and WB.
-    fixture.window.step_cycle();
+    fixture.window.step_cycle();  // it writes back, and the answer exists
+    RV_CHECK_EQ(depth_of(fixture.editor(), 2), 4);
     RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::Taken);
 }
 
@@ -1160,10 +1157,10 @@ RV_TEST(gui, a_branch_that_falls_through_turns_its_line_red) {
         "        li   a1, 99\n"       // line 3, and it really does run
         "out:    ebreak\n");          // line 4
 
-    for (int i = 0; i < 4; ++i) fixture.window.step_cycle();
+    for (int i = 0; i < 6; ++i) fixture.window.step_cycle();
     RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::NotTaken);
     // Nothing was flushed, so what was fetched behind it is still coming.
-    RV_CHECK_EQ(depth_of(fixture.editor(), 3), 1);
+    RV_CHECK_EQ(depth_of(fixture.editor(), 3), 3);
 }
 
 RV_TEST(gui, an_ordinary_instruction_never_claims_a_direction) {
@@ -1198,10 +1195,10 @@ RV_TEST(gui, a_flushed_line_stops_being_tinted_at_once) {
         "        beq  a0, x0, out\n" // line 2, taken
         "        li   a1, 99\n"      // line 3, fetched on the wrong path
         "out:    ebreak\n");         // line 4
-    for (int i = 0; i < 3; ++i) fixture.window.step_cycle();
-    RV_CHECK_EQ(depth_of(fixture.editor(), 3), 0);  // fetched, on the wrong path
+    for (int i = 0; i < 5; ++i) fixture.window.step_cycle();
+    RV_CHECK_EQ(depth_of(fixture.editor(), 3), 2);  // in flight, on the wrong path
 
-    fixture.window.step_cycle();  // the branch resolves in EX
+    fixture.window.step_cycle();  // the branch writes back and redirects
     RV_CHECK_EQ(depth_of(fixture.editor(), 3), -1);
     RV_CHECK_EQ(depth_of(fixture.editor(), 4), 0);  // the target, fetched instead
 }
@@ -1237,13 +1234,13 @@ RV_TEST(gui, the_branch_colours_turn_off_on_their_own) {
         "        beq  a0, x0, out\n"
         "        li   a1, 99\n"
         "out:    ebreak\n");
-    for (int i = 0; i < 4; ++i) fixture.window.step_cycle();
+    for (int i = 0; i < 6; ++i) fixture.window.step_cycle();
     RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::Taken);
 
     fixture.window.set_branch_colours(false);
     RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::Pending);
     // The stage marking itself is untouched -- the two are independent.
-    RV_CHECK_EQ(depth_of(fixture.editor(), 2), 2);
+    RV_CHECK_EQ(depth_of(fixture.editor(), 2), 4);
     RV_CHECK(fixture.window.pipeline_colours());
 
     fixture.window.set_branch_colours(true);
