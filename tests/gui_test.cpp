@@ -82,6 +82,15 @@ int depth_of(EditorWidget& editor, int line) {
     return -1;
 }
 
+/// Which way the line's instruction turned out to go, or Pending if the line
+/// has nothing in flight.
+PipelineTone tone_of(EditorWidget& editor, int line) {
+    for (const PipelineMark& mark : editor.pipeline_lines()) {
+        if (mark.line == line) return mark.tone;
+    }
+    return PipelineTone::Pending;
+}
+
 bool has(const QStringList& lines, const char* needle) {
     for (const QString& line : lines) {
         if (line.contains(needle)) return true;
@@ -1112,16 +1121,56 @@ RV_TEST(gui, the_tint_darkens_as_the_instruction_moves_down_the_pipe) {
     RV_CHECK_EQ(depth_of(fixture.editor(), 4), -1);  // out the far end
 }
 
-RV_TEST(gui, a_two_word_line_stays_bright_until_all_of_it_has_moved_on) {
-    // `li a1, 0x12345` is lui + addi. Three cycles in, its first half is in ID
-    // while its second is still being fetched, and a line is only as far along
-    // as its least advanced instruction.
+RV_TEST(gui, a_two_word_line_takes_the_stage_of_its_furthest_instruction) {
+    // `li a1, 0x12345` is lui + addi. The shading follows the stages strictly,
+    // not the source line as a unit: with lui in ID and addi still in IF, the
+    // line is at ID, because that is where the pipeline has got to on it.
     Fixture fixture;
     for (int i = 0; i < 3; ++i) fixture.window.step_cycle();
-    RV_CHECK_EQ(depth_of(fixture.editor(), 5), 0);
+    RV_CHECK_EQ(depth_of(fixture.editor(), 5), 1);
 
     fixture.window.step_cycle();
-    RV_CHECK_EQ(depth_of(fixture.editor(), 5), 1);
+    RV_CHECK_EQ(depth_of(fixture.editor(), 5), 2);
+}
+
+RV_TEST(gui, a_taken_branch_turns_its_line_green_once_it_resolves) {
+    Fixture fixture(
+        "_start: li   a0, 0\n"        // line 1
+        "        beq  a0, x0, out\n"  // line 2, taken
+        "        li   a1, 99\n"       // line 3
+        "out:    ebreak\n");          // line 4
+
+    for (int i = 0; i < 3; ++i) fixture.window.step_cycle();
+    // Fetched and decoded, but a branch has no answer before EX, so the line
+    // claims nothing yet.
+    RV_CHECK_EQ(depth_of(fixture.editor(), 2), 1);
+    RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::Pending);
+
+    fixture.window.step_cycle();  // resolves in EX
+    RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::Taken);
+    // And it keeps saying so as it drains through MEM and WB.
+    fixture.window.step_cycle();
+    RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::Taken);
+}
+
+RV_TEST(gui, a_branch_that_falls_through_turns_its_line_red) {
+    Fixture fixture(
+        "_start: li   a0, 1\n"        // line 1
+        "        beq  a0, x0, out\n"  // line 2, not taken
+        "        li   a1, 99\n"       // line 3, and it really does run
+        "out:    ebreak\n");          // line 4
+
+    for (int i = 0; i < 4; ++i) fixture.window.step_cycle();
+    RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::NotTaken);
+    // Nothing was flushed, so what was fetched behind it is still coming.
+    RV_CHECK_EQ(depth_of(fixture.editor(), 3), 1);
+}
+
+RV_TEST(gui, an_ordinary_instruction_never_claims_a_direction) {
+    Fixture fixture;
+    for (int i = 0; i < 4; ++i) fixture.window.step_cycle();
+    RV_CHECK_EQ(depth_of(fixture.editor(), 4), 3);  // committed, in MEM
+    RV_CHECK(tone_of(fixture.editor(), 4) == PipelineTone::Pending);
 }
 
 RV_TEST(gui, the_editor_tint_turns_off_without_touching_the_panel) {

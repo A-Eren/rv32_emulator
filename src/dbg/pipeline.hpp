@@ -48,6 +48,11 @@ struct Slot {
     /// means there is nothing here -- a bubble.
     u64 serial = 0;
     bool committed = false;
+    /// Whether committing this instruction sent the pc somewhere other than
+    /// the next address. Only meaningful once `committed`, and only
+    /// interesting for a branch or a jump -- for anything else a redirect
+    /// means a trap.
+    bool redirected = false;
 };
 
 /// What one cycle looked like. Kept both to draw the space-time diagram and to

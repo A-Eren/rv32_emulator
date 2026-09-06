@@ -16,16 +16,28 @@ namespace {
 constexpr int kMarkerColumns = 2;  // breakpoint dot, execution arrow
 constexpr int kGutterPadding = 8;
 
-/// The trail an instruction leaves as it moves down the pipe. One hue, mixed
+/// The trail an instruction leaves as it moves down the pipe: one hue, mixed
 /// into the editor's own background more weakly the further along the
-/// instruction is, so the line just fetched is always the brightest and the
-/// eye follows the newest work. A second hue per stage would compete with the
-/// syntax colouring; a fade does not.
-QColor stage_tint(int depth) {
-    static constexpr double kStrength[] = {0.40, 0.29, 0.20, 0.12, 0.06};
-    const double mix = kStrength[std::clamp(depth, 0, 4)];
+/// instruction is, so the line just fetched is the brightest and the eye
+/// follows the newest work. A different hue per *stage* would compete with the
+/// syntax colouring; a fade does not, which leaves hue free to carry the one
+/// thing worth saying in colour -- which way a branch went.
+QColor stage_tint(int depth, PipelineTone tone) {
+    static constexpr double kPending[] = {0.52, 0.38, 0.26, 0.16, 0.09};
+    // A branch can only be known from EX onward -- which is exactly where the
+    // ordinary fade has gone faint. A resolved branch is the one thing on this
+    // screen worth seeing from across the room, so it gets a curve of its own
+    // that peaks where the answer arrives and fades from there.
+    static constexpr double kResolved[] = {0.52, 0.38, 0.50, 0.38, 0.26};
+
+    // Yellow while nothing is decided. Green and red once a branch has run.
+    QColor lit(0xff, 0xe1, 0x4a);
+    if (tone == PipelineTone::Taken) lit = QColor(0x5c, 0xf2, 0x8a);
+    if (tone == PipelineTone::NotTaken) lit = QColor(0xff, 0x6b, 0x6b);
+
+    const int step = std::clamp(depth, 0, 4);
+    const double mix = tone == PipelineTone::Pending ? kPending[step] : kResolved[step];
     const QColor ground(0x1e, 0x21, 0x27);
-    const QColor lit(0xe8, 0xc0, 0x4e);
     const auto blend = [mix](int back, int front) {
         return static_cast<int>(back + (front - back) * mix + 0.5);
     };
@@ -506,7 +518,7 @@ void EditorWidget::highlight_current_line() {
         QTextBlock block = document()->findBlockByNumber(mark.line - 1);
         if (!block.isValid()) continue;
         QTextEdit::ExtraSelection tint;
-        tint.format.setBackground(stage_tint(mark.depth));
+        tint.format.setBackground(stage_tint(mark.depth, mark.tone));
         tint.format.setProperty(QTextFormat::FullWidthSelection, true);
         tint.cursor = QTextCursor(block);
         tint.cursor.clearSelection();

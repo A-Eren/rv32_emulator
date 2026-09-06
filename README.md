@@ -13,8 +13,9 @@ serves four questions:
 4. **Where is each instruction right now?** — the five pipeline stages with the
    instruction in each, the space-time diagram underneath, and the same five
    stages tinted onto the source lines themselves, brightest where the
-   instruction was just fetched. Stepping by cycle rather than by instruction
-   is what makes a branch's cost visible
+   instruction was just fetched — and green or red on a branch once it has
+   reached EX and knows whether it was taken. Stepping by cycle rather than by
+   instruction is what makes a branch's cost visible
 
 The editor suggests the instruction in a small block under the caret that folds
 away once it is chosen, then greys the operands it still wants in after the caret — a form to

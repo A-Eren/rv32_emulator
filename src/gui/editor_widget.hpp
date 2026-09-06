@@ -21,16 +21,21 @@ namespace rv::gui {
 
 class EditorWidget;
 
-/// A source line with an instruction in flight, and how far down the pipe that
-/// instruction has got: 0 is the stage it was just fetched into, 4 the one it
-/// is about to fall out of. The editor turns the depth into a shade; it does
-/// not need to know what the stages are called.
+/// Which hue a line is tinted in. Yellow is the ordinary case; a branch that
+/// has reached EX has an answer, and says which way it went.
+enum class PipelineTone : unsigned char { Pending, Taken, NotTaken };
+
+/// A source line with an instruction in flight, how far down the pipe that
+/// instruction has got -- 0 is the stage it was just fetched into, 4 the one it
+/// is about to fall out of -- and what it turned out to do. The editor turns
+/// the pair into a shade; it does not need to know what the stages are called.
 struct PipelineMark {
     int line = 0;
     int depth = 0;
+    PipelineTone tone = PipelineTone::Pending;
 
     bool operator==(const PipelineMark& other) const {
-        return line == other.line && depth == other.depth;
+        return line == other.line && depth == other.depth && tone == other.tone;
     }
 };
 

@@ -296,17 +296,35 @@ void MainWindow::set_pipeline_colours(bool on) {
     refresh_pipeline_marks();
 }
 
+namespace {
+
+/// What a slot says about itself in colour. Yellow unless it is a branch or a
+/// jump that has already run: only at EX does the machine know which way it
+/// went, so only from EX onward is there anything to claim.
+PipelineTone tone_of(const dbg::Slot& slot) {
+    if (!slot.committed || !slot.instr.valid()) return PipelineTone::Pending;
+    const isa::InstrGroup group = slot.instr.desc().group;
+    if (group != isa::InstrGroup::Branch && group != isa::InstrGroup::Jump) {
+        return PipelineTone::Pending;
+    }
+    return slot.redirected ? PipelineTone::Taken : PipelineTone::NotTaken;
+}
+
+}  // namespace
+
 // Which source lines have an instruction in flight, and how far along it is.
-// A line is only as far along as its *least* advanced instruction: a two-word
-// pseudo-instruction is still being fetched while its second half is in IF, so
-// it keeps the bright shade until the whole line has moved on.
+//
+// Strictly by stage: a line shows its *most advanced* instruction. The stages
+// decide, and the line is only where they happen to be drawn -- so when a
+// two-word pseudo-instruction straddles ID and EX, the line is at EX, because
+// that is where the pipeline has got to on it.
 void MainWindow::refresh_pipeline_marks() {
     if (!pipeline_colours_) {
         editor_->set_pipeline_lines({});
         return;
     }
 
-    std::map<int, int> depth_of_line;
+    std::map<int, PipelineMark> deepest;
     for (std::size_t depth = 0; depth < dbg::kNumStages; ++depth) {
         const dbg::Slot& slot = pipeline_model_.at(static_cast<dbg::Stage>(depth));
         if (!slot.valid) continue;
@@ -314,15 +332,14 @@ void MainWindow::refresh_pipeline_marks() {
         if (!line.has_value()) continue;
 
         const int number = static_cast<int>(*line);
-        const auto found = depth_of_line.find(number);
-        if (found == depth_of_line.end() || static_cast<int>(depth) < found->second) {
-            depth_of_line[number] = static_cast<int>(depth);
-        }
+        const PipelineMark mark{number, static_cast<int>(depth), tone_of(slot)};
+        const auto found = deepest.find(number);
+        if (found == deepest.end() || mark.depth > found->second.depth) deepest[number] = mark;
     }
 
     std::vector<PipelineMark> marks;
-    marks.reserve(depth_of_line.size());
-    for (const auto& [line, depth] : depth_of_line) marks.push_back(PipelineMark{line, depth});
+    marks.reserve(deepest.size());
+    for (const auto& [line, mark] : deepest) marks.push_back(mark);
     editor_->set_pipeline_lines(std::move(marks));
 }
 

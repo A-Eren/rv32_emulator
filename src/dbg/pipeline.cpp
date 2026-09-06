@@ -131,7 +131,8 @@ StopEvent Pipeline::tick() {
         committed = true;
         ex.committed = true;
 
-        if (session_->cpu().pc != sequential) {
+        ex.redirected = session_->cpu().pc != sequential;
+        if (ex.redirected) {
             // A taken branch, a jump, a trap or an interrupt -- they all look
             // the same from here, which is why none of them needs its own case.
             // Whatever was fetched behind this was on the path not taken.
