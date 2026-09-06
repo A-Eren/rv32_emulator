@@ -104,7 +104,8 @@ void PipelineWidget::paintEvent(QPaintEvent* /*event*/) {
         if (pipeline_->last_flushed() > 0) {
             right = QString::asprintf("flushed %u   ", pipeline_->last_flushed()) + right;
         }
-        painter.setPen(kDimColour);
+        if (pipeline_->last_mispredicted()) right = "mispredicted   " + right;
+        painter.setPen(pipeline_->last_mispredicted() ? QColor(0xf2, 0x6d, 0x6d) : kDimColour);
         painter.drawText(QRect(8, y, width() - 16, line_height),
                          Qt::AlignRight | Qt::AlignVCenter, right);
         y += line_height + 4;
@@ -177,6 +178,10 @@ int PipelineWidget::draw_strip(QPainter& painter, int y) {
     painter.drawText(QRect(left, y, width() - left - 8, line_height),
                      Qt::AlignLeft | Qt::AlignVCenter,
                      "IF fetch · ID decode · EX ALU · MEM data memory · WB register write");
+    y += line_height;
+    painter.drawText(QRect(left, y, width() - left - 8, line_height),
+                     Qt::AlignLeft | Qt::AlignVCenter,
+                     "branch target computed in EX · guessed taken · checked at WB");
 
     return y + line_height + 4;
 }

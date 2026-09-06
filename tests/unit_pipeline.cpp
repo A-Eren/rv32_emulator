@@ -107,9 +107,11 @@ RV_TEST(pipeline, a_bubble_has_no_spelling) {
     RV_CHECK_STR(spelling(pipeline, Stage::WB), "");
 }
 
-RV_TEST(pipeline, a_taken_branch_discards_what_was_fetched_behind_it) {
-    // The front-end fetches straight through, so by the time the branch reaches
-    // write-back everything behind it is on the wrong path.
+RV_TEST(pipeline, the_target_is_computed_in_ex_and_the_front_end_follows_it) {
+    // EX is where the target adder is, so that is where the front-end learns
+    // there is somewhere else to go. Which way the branch goes is not known
+    // until it runs, so the guess is always-taken -- and here the guess is
+    // right, which costs only the one fetch it turned around.
     DebugSession session = make_session(
         "        addi a0, x0, 0\n"
         "        beq  a0, x0, target\n"
@@ -120,29 +122,38 @@ RV_TEST(pipeline, a_taken_branch_discards_what_was_fetched_behind_it) {
         "        ebreak\n");
     Pipeline pipeline(session);
 
-    // Six cycles: four to fill, then the addi retires, then the beq.
-    for (int i = 0; i < 6; ++i) pipeline.tick();
-
-    RV_CHECK_STR(spelling(pipeline, Stage::WB), "beq");
-    RV_CHECK(!pipeline.at(Stage::MEM).valid);
-    RV_CHECK(!pipeline.at(Stage::EX).valid);
-    RV_CHECK(!pipeline.at(Stage::ID).valid);
-    RV_CHECK_EQ(pipeline.last_flushed(), u8{3});
-
-    // And the next fetch comes from the target, not from where it was walking.
     const auto target = session.lookup_symbol("target");
     RV_CHECK(target.has_value());
-    RV_CHECK(pipeline.at(Stage::IF).valid);
+
+    // Four cycles in, the beq is in EX and the guess has already been made.
+    for (int i = 0; i < 4; ++i) pipeline.tick();
+    RV_CHECK_STR(spelling(pipeline, Stage::EX), "beq");
+    RV_CHECK(pipeline.at(Stage::EX).predicted);
+    RV_CHECK_HEX(pipeline.at(Stage::EX).predicted_pc, *target);
+    // The instruction fetched from straight ahead is gone, and the next one
+    // comes from the target.
+    RV_CHECK(!pipeline.at(Stage::ID).valid);
+    RV_CHECK_EQ(pipeline.last_flushed(), u8{1});
     RV_CHECK_HEX(pipeline.at(Stage::IF).pc, *target);
 
-    // The wrong-path instructions never ran.
+    // Two cycles later it retires and the guess turns out to have been right,
+    // so nothing else is thrown away.
+    for (int i = 0; i < 2; ++i) pipeline.tick();
+    RV_CHECK_STR(spelling(pipeline, Stage::WB), "beq");
+    RV_CHECK(pipeline.at(Stage::WB).redirected);
+    RV_CHECK_EQ(pipeline.last_flushed(), u8{0});
+    RV_CHECK(!pipeline.last_mispredicted());
+
+    // And the path not taken never ran.
     run_out(pipeline, session);
     RV_CHECK_HEX(session.cpu().x[11], 0u);
     RV_CHECK_HEX(session.cpu().x[12], 0u);
     RV_CHECK_HEX(session.cpu().x[13], 7u);
 }
 
-RV_TEST(pipeline, a_branch_that_falls_through_keeps_the_pipe_full) {
+RV_TEST(pipeline, a_branch_that_falls_through_is_a_misprediction) {
+    // Always-taken is wrong about a branch that does not branch, and nothing
+    // finds out until it runs at write-back.
     DebugSession session = make_session(
         "        addi a0, x0, 1\n"
         "        beq  a0, x0, skip\n"   // not taken
@@ -151,12 +162,20 @@ RV_TEST(pipeline, a_branch_that_falls_through_keeps_the_pipe_full) {
         "        ebreak\n");
     Pipeline pipeline(session);
 
-    for (int i = 0; i < 6; ++i) pipeline.tick();
+    for (int i = 0; i < 4; ++i) pipeline.tick();
+    RV_CHECK(pipeline.at(Stage::EX).predicted);  // guessed taken anyway
 
+    for (int i = 0; i < 2; ++i) pipeline.tick();
     RV_CHECK_STR(spelling(pipeline, Stage::WB), "beq");
-    RV_CHECK_EQ(pipeline.last_flushed(), u8{0});
-    RV_CHECK(pipeline.at(Stage::MEM).valid);
-    RV_CHECK_STR(spelling(pipeline, Stage::MEM), "addi");
+    RV_CHECK(!pipeline.at(Stage::WB).redirected);  // it fell through after all
+    RV_CHECK(pipeline.last_mispredicted());
+    RV_CHECK_EQ(pipeline.last_flushed(), u8{2});
+
+    // The front-end is put back on the road it should have stayed on.
+    RV_CHECK_HEX(pipeline.at(Stage::IF).pc, session.cpu().pc);
+
+    run_out(pipeline, session);
+    RV_CHECK_HEX(session.cpu().x[11], 5u);  // the fall-through really did run
 }
 
 RV_TEST(pipeline, ticking_leaves_exactly_the_machine_that_stepping_does) {
@@ -341,4 +360,51 @@ RV_TEST(pipeline, resync_recovers_which_way_a_branch_went) {
 
     RV_CHECK_STR(spelling(pipeline, Stage::WB), "beq");
     RV_CHECK(pipeline.at(Stage::WB).redirected);
+}
+
+RV_TEST(pipeline, an_unconditional_jump_is_never_mispredicted) {
+    // Always-taken is exactly right about a jump, every time.
+    DebugSession session = make_session(
+        "        addi a0, x0, 1\n"
+        "        j    onward\n"
+        "        addi a1, x0, 99\n"   // never runs
+        "onward:\n"
+        "        addi a2, x0, 7\n"
+        "        ebreak\n");
+    Pipeline pipeline(session);
+
+    for (int i = 0; i < 4; ++i) pipeline.tick();
+    RV_CHECK(pipeline.at(Stage::EX).predicted);
+    RV_CHECK_HEX(pipeline.at(Stage::EX).predicted_pc, *session.lookup_symbol("onward"));
+
+    for (int i = 0; i < 2; ++i) pipeline.tick();
+    RV_CHECK(!pipeline.last_mispredicted());
+
+    run_out(pipeline, session);
+    RV_CHECK_HEX(session.cpu().x[11], 0u);
+    RV_CHECK_HEX(session.cpu().x[12], 7u);
+}
+
+RV_TEST(pipeline, a_register_jump_is_not_guessed_at_all) {
+    // jalr's target is in a register, and a register is not read until the
+    // instruction runs -- so there is nothing for EX to compute and nothing to
+    // guess. It redirects at write-back and throws away what is behind it.
+    DebugSession session = make_session(
+        "        la   a0, onward\n"
+        "        jalr x0, a0, 0\n"
+        "        addi a1, x0, 99\n"   // never runs
+        "onward:\n"
+        "        addi a2, x0, 7\n"
+        "        ebreak\n");
+    Pipeline pipeline(session);
+
+    // la is two instructions, so jalr reaches EX a cycle later than a one-word
+    // first line would put it.
+    for (int i = 0; i < 5; ++i) pipeline.tick();
+    RV_CHECK_STR(spelling(pipeline, Stage::EX), "jalr");
+    RV_CHECK(!pipeline.at(Stage::EX).predicted);
+
+    run_out(pipeline, session);
+    RV_CHECK_HEX(session.cpu().x[11], 0u);
+    RV_CHECK_HEX(session.cpu().x[12], 7u);
 }

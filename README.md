@@ -51,9 +51,10 @@ through what you wrote.
 The pipeline is a picture of the machine, not a re-timing of it: instructions
 still execute atomically — the view runs each one on the cycle it reaches
 write-back — `mcycle` still counts instructions, and the panel keeps its own
-cycle count. Because a branch cannot resolve until it runs, the flush is four
-deep where real hardware resolving in EX would throw away two. Hazards, stalls,
-forwarding and branch prediction are not implemented yet.
+cycle count. Branch targets are computed in EX and followed on an always-taken
+guess; the condition is only known when the instruction runs, so a wrong guess
+is caught at write-back and costs more than it would in hardware. Hazards,
+stalls and forwarding are not implemented yet.
 
 ## Building
 

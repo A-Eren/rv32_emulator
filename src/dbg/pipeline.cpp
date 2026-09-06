@@ -5,6 +5,23 @@ namespace {
 
 constexpr std::size_t index_of(Stage stage) { return static_cast<std::size_t>(stage); }
 
+/// Whether the target is knowable from the encoding alone -- the pc plus the
+/// immediate. That is every branch and every pc-relative jump. `jalr` and the
+/// compressed register jumps are not: their target is in a register, and a
+/// register is not read until the instruction runs.
+bool has_static_target(const isa::DecodedInstr& instr) {
+    if (!instr.valid()) return false;
+    switch (instr.desc().syntax) {
+        case isa::OperandSyntax::RS1_RS2_LBL:   // beq, bne, blt, bge, bltu, bgeu
+        case isa::OperandSyntax::RD_LBL:        // jal
+        case isa::OperandSyntax::C_LBL:         // c.j, c.jal
+        case isa::OperandSyntax::C_RS1P_LBL:    // c.beqz, c.bnez
+            return true;
+        default:
+            return false;
+    }
+}
+
 }  // namespace
 
 const char* stage_name(Stage stage) {
@@ -35,6 +52,7 @@ void Pipeline::start_over() {
     history_.clear();
     ticks_ = 0;
     last_flushed_ = 0;
+    last_mispredicted_ = false;
 }
 
 void Pipeline::reset() {
@@ -66,7 +84,15 @@ void Pipeline::resync() {
     if (session_->has_program() && !session_->halted()) {
         // Nearest to retiring first, so the instruction at the pc lands in MEM
         // and reaches write-back on the very next cycle.
-        for (const Stage stage : {Stage::MEM, Stage::EX, Stage::ID, Stage::IF}) {
+        for (const Stage stage : {Stage::MEM, Stage::EX}) {
+            Slot& slot = slots_[index_of(stage)];
+            slot = fetch(fetch_pc_);
+            fetch_pc_ += slot.instr.length;
+        }
+        // Whatever is in EX has already had its target computed by the time the
+        // pipe looks like this, so the two behind it come from there.
+        predict_taken();
+        for (const Stage stage : {Stage::ID, Stage::IF}) {
             Slot& slot = slots_[index_of(stage)];
             slot = fetch(fetch_pc_);
             fetch_pc_ += slot.instr.length;
@@ -85,6 +111,29 @@ Slot Pipeline::fetch(Addr addr) {
     return slot;
 }
 
+u8 Pipeline::predict_taken() {
+    Slot& executing = slots_[index_of(Stage::EX)];
+    if (!executing.valid || executing.predicted) return 0;
+    if (!has_static_target(executing.instr)) return 0;
+
+    // EX is where the target adder lives, so this is where the front-end learns
+    // there is somewhere else to go. Which way the branch actually goes is not
+    // known until it runs -- so guess, and always guess taken. There is no
+    // history to consult, and an unconditional jump is right every time.
+    executing.predicted = true;
+    executing.predicted_pc = executing.pc + static_cast<u32>(executing.instr.imm);
+
+    // What the front-end fetched while this was still being decoded came from
+    // straight ahead, and the guess says otherwise.
+    u8 discarded = 0;
+    for (const Stage stage : {Stage::ID, Stage::IF}) {
+        if (slots_[index_of(stage)].valid) ++discarded;
+        slots_[index_of(stage)] = Slot{};
+    }
+    fetch_pc_ = executing.predicted_pc;
+    return discarded;
+}
+
 void Pipeline::record(bool committed, u8 flushed) {
     CycleRecord entry;
     entry.tick = ticks_;
@@ -92,6 +141,7 @@ void Pipeline::record(bool committed, u8 flushed) {
     entry.fetch_pc = fetch_pc_;
     entry.committed = committed;
     entry.flushed = flushed;
+    entry.mispredicted = last_mispredicted_;
     history_.push_back(entry);
     if (history_.size() > kHistoryDepth) history_.pop_front();
 }
@@ -111,6 +161,7 @@ StopEvent Pipeline::tick() {
     StopEvent event;
     u8 flushed = 0;
     bool committed = false;
+    bool mispredicted = false;
 
     // Write-back is where an instruction becomes part of the machine: the
     // register file is written here, and this emulator does the whole
@@ -129,19 +180,21 @@ StopEvent Pipeline::tick() {
     }
 
     if (runnable) {
-        // The front-end only ever runs ahead sequentially, and every redirect
-        // discards what was fetched behind it, so the instruction arriving here
-        // is the one the machine is about to run.
         const Addr sequential = retiring.pc + retiring.instr.length;
+        // Where the front-end was told to go: the guess if one was made in EX,
+        // otherwise straight ahead.
+        const Addr expected = retiring.predicted ? retiring.predicted_pc : sequential;
+
         event = session_->step(StepKind::Instruction);
         committed = true;
         retiring.committed = true;
         retiring.redirected = session_->cpu().pc != sequential;
 
-        if (retiring.redirected) {
-            // A taken branch, a jump, a trap or an interrupt -- they all look
-            // the same from here, which is why none of them needs its own case.
-            // Everything still in the pipe was fetched on the path not taken.
+        if (session_->cpu().pc != expected) {
+            // The guess was wrong, or something nobody guesses about happened:
+            // a jalr, a trap, an interrupt. Either way everything in the pipe
+            // came from the wrong place.
+            mispredicted = retiring.predicted;
             for (const Stage stage : {Stage::MEM, Stage::EX, Stage::ID, Stage::IF}) {
                 if (slots_[index_of(stage)].valid) ++flushed;
                 slots_[index_of(stage)] = Slot{};
@@ -149,6 +202,9 @@ StopEvent Pipeline::tick() {
             fetch_pc_ = session_->cpu().pc;
         }
     }
+
+    // EX computes the branch target, so this is where the front-end turns.
+    flushed = static_cast<u8>(flushed + predict_taken());
 
     // Fetch, unless the machine has stopped for good. A breakpoint still
     // fetches: the instruction it guards belongs in the pipe, fetched and not
@@ -161,6 +217,7 @@ StopEvent Pipeline::tick() {
 
     ++ticks_;
     last_flushed_ = flushed;
+    last_mispredicted_ = mispredicted;
     record(committed, flushed);
     return committed ? event : make_step_event();
 }
@@ -179,6 +236,7 @@ bool Pipeline::reverse_tick() {
     fetch_pc_ = now.fetch_pc;
     ticks_ = now.tick;
     last_flushed_ = now.flushed;
+    last_mispredicted_ = now.mispredicted;
     return true;
 }
 

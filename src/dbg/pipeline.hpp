@@ -53,6 +53,13 @@ struct Slot {
     /// interesting for a branch or a jump -- for anything else a redirect
     /// means a trap.
     bool redirected = false;
+
+    /// Set while this instruction was in EX, if the front-end was sent to its
+    /// target on the strength of the always-taken guess. `predicted_pc` is
+    /// where it was sent, and write-back checks the guess against what really
+    /// happened.
+    bool predicted = false;
+    Addr predicted_pc = 0;
 };
 
 /// What one cycle looked like. Kept both to draw the space-time diagram and to
@@ -66,6 +73,7 @@ struct CycleRecord {
     Addr fetch_pc = 0;
     bool committed = false;
     u8 flushed = 0;
+    bool mispredicted = false;
 };
 
 class Pipeline {
@@ -104,8 +112,10 @@ public:
     /// experienced.
     u64 ticks() const { return ticks_; }
     bool drained() const;
-    /// Cells discarded by the most recent redirect.
+    /// Cells discarded by the most recent redirect, whichever kind.
     u8 last_flushed() const { return last_flushed_; }
+    /// True when the most recent cycle found the always-taken guess wrong.
+    bool last_mispredicted() const { return last_mispredicted_; }
 
     /// Oldest cycle first. The first entry is the state the pipe started in and
     /// carries tick 0.
@@ -115,6 +125,9 @@ public:
 
 private:
     Slot fetch(Addr addr);
+    /// Send the front-end to the target of the instruction in EX, if it has
+    /// one. Returns how many fetched cells that threw away.
+    u8 predict_taken();
     void record(bool committed, u8 flushed);
     void start_over();
     /// A cycle in which nothing reached EX still has to say where the
@@ -127,6 +140,7 @@ private:
     u64 ticks_ = 0;
     u64 next_serial_ = 1;
     u8 last_flushed_ = 0;
+    bool last_mispredicted_ = false;
     std::deque<CycleRecord> history_;
 };
 

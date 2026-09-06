@@ -133,11 +133,10 @@ of shades to rank by eye:
 - **The line that has just finished** — the one in write-back — in yellow.
   There is only ever one.
 - **A branch that has resolved**, green if it was taken and red if it fell
-  through. Only at write-back: real hardware resolves the condition in EX, but
-  this emulator runs a whole instruction at once and that happens at WB, so WB
-  is the first cycle there is an answer to show. Before that a branch is marked
-  like anything else — claiming to know earlier would be a prediction, and there
-  is no predictor here.
+  through. Only at write-back, because that is where the instruction runs and
+  the condition is finally known. While it is in flight the branch is marked
+  like anything else — the front-end has *guessed* by then, but a guess is not
+  an answer.
 
 The marking follows the stages, not the source. A line holding a two-word
 pseudo-instruction like `li a0, 0x12345` shows its *most advanced* instruction:
@@ -155,32 +154,52 @@ Both halves are optional and independent, under **View**:
 
 The panel is unaffected by either.
 
+### Branches: guessed in EX, settled in WB
+
+**EX computes the target.** That is where the adder is, and the target of a
+branch or a `j`/`jal` is just the pc plus the immediate — no register needed. So
+the cycle a branch reaches EX, the front-end is told where to go.
+
+**The guess is always taken.** There is no history to consult, and it is right
+every time for an unconditional jump. Sending the front-end to the target throws
+away the one instruction already fetched from straight ahead, which is the cost
+of a correctly guessed branch: one cycle.
+
+**Write-back settles it.** The condition is only known once the instruction
+runs, and that happens in WB. If the branch fell through after all, the guess
+was wrong and everything in the pipe came from the wrong place, so it is all
+discarded and fetching restarts from the fall-through. The panel says
+`mispredicted` on that cycle.
+
+`jalr` is not guessed at all: its target is in a register, and a register is not
+read until the instruction runs. It redirects at write-back like a
+misprediction, and so do traps and interrupts.
+
 ### The pipeline is a picture, not a timing model
 
 The stages mean what they mean everywhere else: **IF** fetches, **ID** decodes
-and reads the registers, **EX** is the ALU, **MEM** is the data access, and
-**WB** writes the register file.
+and reads the registers, **EX** is the ALU and the branch target adder, **MEM**
+is the data access, and **WB** writes the register file.
 
 Underneath, though, the machine has no pipeline: `Hart::step()` fetches,
 decodes, executes and commits one instruction in a single call. The view runs
-that call the cycle the instruction reaches **write-back**, because that is
-where an instruction becomes part of the machine — so the register and memory
-panels change on the cycle the pipeline says they should.
+that call the cycle the instruction reaches write-back, because that is where an
+instruction becomes part of the machine — so the register and memory panels
+change on the cycle the pipeline says they should.
 
-The cost of doing it that way is the branch penalty. Real hardware resolves a
-branch condition in EX and throws away the two instructions behind it; here the
-answer does not exist until the instruction runs at WB, so four are thrown away
-instead. The picture is right about *what* happens in each stage and about the
-order; it overstates what a mispredicted branch costs.
+The cost of doing it that way is where a mispredicted branch is caught. Real
+hardware compares the registers in EX and knows immediately; here the comparison
+is part of running the instruction, so it is not known until WB and the flush is
+deeper than it would be. The picture is right about what each stage does, about
+the order, and about the cost of a *correct* guess; it overstates the cost of a
+wrong one.
 
 `mcycle`, `cycle` and `time` still count instructions, and the timer fires
 exactly when it did before. The panel keeps its own cycle count, shown in its
 top right, and it is deliberately not the same number as the one in the status
 bar: a cycle spent filling the pipe is not a cycle the machine experienced.
 
-There are no hazards, no stalls and no forwarding, and no branch prediction: the
-front-end fetches straight past a branch and discards what it fetched when the
-branch goes the other way.
+There are still no hazards, no stalls and no forwarding.
 
 ## The command-line debugger
 

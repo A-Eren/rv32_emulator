@@ -1159,8 +1159,9 @@ RV_TEST(gui, a_branch_that_falls_through_turns_its_line_red) {
 
     for (int i = 0; i < 6; ++i) fixture.window.step_cycle();
     RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::NotTaken);
-    // Nothing was flushed, so what was fetched behind it is still coming.
-    RV_CHECK_EQ(depth_of(fixture.editor(), 3), 3);
+    // Always-taken guessed wrong, so the fall-through it had thrown away is
+    // fetched all over again -- back at the start of the pipe.
+    RV_CHECK_EQ(depth_of(fixture.editor(), 3), 0);
 }
 
 RV_TEST(gui, an_ordinary_instruction_never_claims_a_direction) {
@@ -1187,18 +1188,19 @@ RV_TEST(gui, the_editor_tint_turns_off_without_touching_the_panel) {
     RV_CHECK_EQ(depth_of(fixture.editor(), 4), 2);
 }
 
-RV_TEST(gui, a_flushed_line_stops_being_tinted_at_once) {
-    // The instruction after a taken branch is fetched and then thrown away.
-    // It must not be left glowing on a line that never runs.
+RV_TEST(gui, a_line_thrown_away_by_the_guess_stops_being_marked_at_once) {
+    // The line after a branch is fetched from straight ahead, and dropped as
+    // soon as EX computes the target and the guess says otherwise. It must not
+    // be left marked on code that never runs.
     Fixture fixture(
         "_start: li   a0, 0\n"       // line 1
         "        beq  a0, x0, out\n" // line 2, taken
         "        li   a1, 99\n"      // line 3, fetched on the wrong path
         "out:    ebreak\n");         // line 4
-    for (int i = 0; i < 5; ++i) fixture.window.step_cycle();
-    RV_CHECK_EQ(depth_of(fixture.editor(), 3), 2);  // in flight, on the wrong path
+    for (int i = 0; i < 3; ++i) fixture.window.step_cycle();
+    RV_CHECK_EQ(depth_of(fixture.editor(), 3), 0);  // fetched from straight ahead
 
-    fixture.window.step_cycle();  // the branch writes back and redirects
+    fixture.window.step_cycle();  // the beq reaches EX and the target is known
     RV_CHECK_EQ(depth_of(fixture.editor(), 3), -1);
     RV_CHECK_EQ(depth_of(fixture.editor(), 4), 0);  // the target, fetched instead
 }
