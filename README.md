@@ -11,8 +11,10 @@ serves four questions:
    panel, which for a compressed instruction also shows the one it expands to
 3. **Why did it not assemble?** — line, column, caret, and a suggested fix
 4. **Where is each instruction right now?** — the five pipeline stages with the
-   instruction in each, and the space-time diagram underneath. Stepping by
-   cycle rather than by instruction is what makes a branch's cost visible
+   instruction in each, the space-time diagram underneath, and the same five
+   stages tinted onto the source lines themselves, brightest where the
+   instruction was just fetched. Stepping by cycle rather than by instruction
+   is what makes a branch's cost visible
 
 The editor suggests the instruction in a small block under the caret that folds
 away once it is chosen, then greys the operands it still wants in after the caret — a form to

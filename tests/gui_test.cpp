@@ -73,6 +73,15 @@ QStringList diagnostic_lines(MainWindow& window) {
     return out;
 }
 
+/// How far down the pipe the instruction on `line` is, or -1 if that line has
+/// nothing in flight.
+int depth_of(EditorWidget& editor, int line) {
+    for (const PipelineMark& mark : editor.pipeline_lines()) {
+        if (mark.line == line) return mark.depth;
+    }
+    return -1;
+}
+
 bool has(const QStringList& lines, const char* needle) {
     for (const QString& line : lines) {
         if (line.contains(needle)) return true;
@@ -1070,4 +1079,80 @@ RV_TEST(gui, the_pipeline_tab_is_selectable) {
     auto* panel = fixture.window.findChild<PipelineWidget*>();
     RV_CHECK(panel != nullptr);
     RV_CHECK(panel->isVisibleTo(&fixture.window));
+}
+
+// ---------------------------------------------------------------------------
+// The same pipeline, drawn on the code itself
+// ---------------------------------------------------------------------------
+
+RV_TEST(gui, the_editor_tints_the_lines_that_are_in_flight) {
+    // kProgram: line 4 is `li a0, 1`, line 5 the two-word `li a1, 0x12345`.
+    Fixture fixture;
+    RV_CHECK(fixture.window.pipeline_colours());
+    RV_CHECK(fixture.editor().pipeline_lines().empty());  // nothing fetched yet
+
+    fixture.window.step_cycle();
+    RV_CHECK_EQ(fixture.editor().pipeline_lines().size(), std::size_t{1});
+    RV_CHECK_EQ(depth_of(fixture.editor(), 4), 0);
+
+    fixture.window.step_cycle();
+    RV_CHECK_EQ(depth_of(fixture.editor(), 4), 1);
+    RV_CHECK_EQ(depth_of(fixture.editor(), 5), 0);
+}
+
+RV_TEST(gui, the_tint_darkens_as_the_instruction_moves_down_the_pipe) {
+    // One shade per stage, brightest where it was just fetched -- so a line
+    // fades out over the five cycles it takes to cross.
+    Fixture fixture;
+    for (int expected = 0; expected < 5; ++expected) {
+        fixture.window.step_cycle();
+        RV_CHECK_EQ(depth_of(fixture.editor(), 4), expected);
+    }
+    fixture.window.step_cycle();
+    RV_CHECK_EQ(depth_of(fixture.editor(), 4), -1);  // out the far end
+}
+
+RV_TEST(gui, a_two_word_line_stays_bright_until_all_of_it_has_moved_on) {
+    // `li a1, 0x12345` is lui + addi. Three cycles in, its first half is in ID
+    // while its second is still being fetched, and a line is only as far along
+    // as its least advanced instruction.
+    Fixture fixture;
+    for (int i = 0; i < 3; ++i) fixture.window.step_cycle();
+    RV_CHECK_EQ(depth_of(fixture.editor(), 5), 0);
+
+    fixture.window.step_cycle();
+    RV_CHECK_EQ(depth_of(fixture.editor(), 5), 1);
+}
+
+RV_TEST(gui, the_editor_tint_turns_off_without_touching_the_panel) {
+    Fixture fixture;
+    for (int i = 0; i < 3; ++i) fixture.window.step_cycle();
+    RV_CHECK(!fixture.editor().pipeline_lines().empty());
+
+    fixture.window.set_pipeline_colours(false);
+    RV_CHECK(fixture.editor().pipeline_lines().empty());
+
+    // The panel is the other half of the same feature and keeps working.
+    auto* panel = fixture.window.findChild<PipelineWidget*>();
+    RV_CHECK(panel != nullptr);
+    RV_CHECK(has(panel->stage_summary(), "EX=addi"));
+
+    fixture.window.set_pipeline_colours(true);
+    RV_CHECK_EQ(depth_of(fixture.editor(), 4), 2);
+}
+
+RV_TEST(gui, a_flushed_line_stops_being_tinted_at_once) {
+    // The instruction after a taken branch is fetched and then thrown away.
+    // It must not be left glowing on a line that never runs.
+    Fixture fixture(
+        "_start: li   a0, 0\n"       // line 1
+        "        beq  a0, x0, out\n" // line 2, taken
+        "        li   a1, 99\n"      // line 3, fetched on the wrong path
+        "out:    ebreak\n");         // line 4
+    for (int i = 0; i < 3; ++i) fixture.window.step_cycle();
+    RV_CHECK_EQ(depth_of(fixture.editor(), 3), 0);  // fetched, on the wrong path
+
+    fixture.window.step_cycle();  // the branch resolves in EX
+    RV_CHECK_EQ(depth_of(fixture.editor(), 3), -1);
+    RV_CHECK_EQ(depth_of(fixture.editor(), 4), 0);  // the target, fetched instead
 }

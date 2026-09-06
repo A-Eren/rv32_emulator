@@ -88,6 +88,7 @@ Standard editing keys, plus:
 | Key | What it does |
 |---|---|
 | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` | New, open, save |
+| `Ctrl+Shift+P` | Turn the pipeline colours on the code on or off |
 | Click the margin | Toggle a breakpoint on that line |
 | Click a diagnostic | Jump to the line it points at |
 
@@ -111,6 +112,31 @@ broken edit never destroys the program you are already stepping.
 | Devices | What is attached, name and type in columns of their own, with each device's controls below. Select a block and its contents appear as memory, with its own `.mem` in and out. **Double-click a name to rename it** |
 | Console | Whatever the program sent to the UART |
 | Symbols | Every symbol with the **space** it lives in — the thing that explains why `call msg` was rejected |
+
+### The pipeline, drawn on the code itself
+
+The same five stages are shown on the source lines, so the pipeline can be read
+without looking away from what was written. The line whose instruction was just
+fetched is the brightest, and each line fades a shade as its instruction moves
+down the pipe — the trail is the last five cycles of work, oldest and dimmest at
+the top.
+
+```
+        add     t3, t0, t1      ← in WB,  faintest
+        mv      t0, t1          ← in MEM
+        mv      t1, t3          ← in EX,  where it commits
+        addi    t2, t2, 1       ← in ID
+        j       loop            ← in IF,  brightest
+```
+
+Two details it gets right. A line holding a two-instruction pseudo like
+`li a0, 0x12345` keeps the brighter shade until **both** halves have moved on: a
+line is only as far along as its least advanced instruction. And a line fetched
+on the wrong side of a branch stops being tinted the moment the branch resolves,
+so nothing is left glowing on code that never ran.
+
+**View ▸ Pipeline colours in the editor** (`Ctrl+Shift+P`) turns it off. The
+panel is unaffected either way — the two halves are independent.
 
 ### The pipeline is a picture, not a timing model
 

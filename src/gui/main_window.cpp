@@ -276,6 +276,54 @@ void MainWindow::build_actions() {
     for (QAction* action : toolbar->actions()) {
         if (!action->isSeparator()) run_menu->addAction(action);
     }
+
+    // Not on the toolbar: it is a preference about how the editor looks, not
+    // something you reach for while stepping, and the toolbar is already as
+    // wide as the window can spare.
+    auto* view_menu = menuBar()->addMenu("&View");
+    action_pipeline_colours_ = view_menu->addAction("Pipeline colours in the editor");
+    action_pipeline_colours_->setCheckable(true);
+    action_pipeline_colours_->setChecked(pipeline_colours_);
+    action_pipeline_colours_->setShortcut(QKeySequence("Ctrl+Shift+P"));
+    connect(action_pipeline_colours_, &QAction::toggled, this, &MainWindow::set_pipeline_colours);
+}
+
+void MainWindow::set_pipeline_colours(bool on) {
+    pipeline_colours_ = on;
+    if (action_pipeline_colours_ != nullptr && action_pipeline_colours_->isChecked() != on) {
+        action_pipeline_colours_->setChecked(on);
+    }
+    refresh_pipeline_marks();
+}
+
+// Which source lines have an instruction in flight, and how far along it is.
+// A line is only as far along as its *least* advanced instruction: a two-word
+// pseudo-instruction is still being fetched while its second half is in IF, so
+// it keeps the bright shade until the whole line has moved on.
+void MainWindow::refresh_pipeline_marks() {
+    if (!pipeline_colours_) {
+        editor_->set_pipeline_lines({});
+        return;
+    }
+
+    std::map<int, int> depth_of_line;
+    for (std::size_t depth = 0; depth < dbg::kNumStages; ++depth) {
+        const dbg::Slot& slot = pipeline_model_.at(static_cast<dbg::Stage>(depth));
+        if (!slot.valid) continue;
+        const std::optional<u32> line = session_->map().line_of(slot.pc);
+        if (!line.has_value()) continue;
+
+        const int number = static_cast<int>(*line);
+        const auto found = depth_of_line.find(number);
+        if (found == depth_of_line.end() || static_cast<int>(depth) < found->second) {
+            depth_of_line[number] = static_cast<int>(depth);
+        }
+    }
+
+    std::vector<PipelineMark> marks;
+    marks.reserve(depth_of_line.size());
+    for (const auto& [line, depth] : depth_of_line) marks.push_back(PipelineMark{line, depth});
+    editor_->set_pipeline_lines(std::move(marks));
 }
 
 // ---------------------------------------------------------------------------
@@ -522,6 +570,7 @@ void MainWindow::refresh_all() {
     editor_->set_execution_line(static_cast<int>(session_->current_line().value_or(0)));
 
     action_back_->setEnabled(session_->can_reverse());
+    refresh_pipeline_marks();
     encoding_->update();
     pipeline_->update();
 }

@@ -16,6 +16,23 @@ namespace {
 constexpr int kMarkerColumns = 2;  // breakpoint dot, execution arrow
 constexpr int kGutterPadding = 8;
 
+/// The trail an instruction leaves as it moves down the pipe. One hue, mixed
+/// into the editor's own background more weakly the further along the
+/// instruction is, so the line just fetched is always the brightest and the
+/// eye follows the newest work. A second hue per stage would compete with the
+/// syntax colouring; a fade does not.
+QColor stage_tint(int depth) {
+    static constexpr double kStrength[] = {0.40, 0.29, 0.20, 0.12, 0.06};
+    const double mix = kStrength[std::clamp(depth, 0, 4)];
+    const QColor ground(0x1e, 0x21, 0x27);
+    const QColor lit(0xe8, 0xc0, 0x4e);
+    const auto blend = [mix](int back, int front) {
+        return static_cast<int>(back + (front - back) * mix + 0.5);
+    };
+    return QColor(blend(ground.red(), lit.red()), blend(ground.green(), lit.green()),
+                  blend(ground.blue(), lit.blue()));
+}
+
 QColor colour_for(as::Severity severity) {
     switch (severity) {
         case as::Severity::Error: return QColor(0xf2, 0x6d, 0x6d);
@@ -482,6 +499,20 @@ void EditorWidget::highlight_current_line() {
     line.cursor.clearSelection();
     selections.append(line);
 
+    // The lines whose instructions are in flight, tinted by how far along they
+    // are. Before the overflow marks, so a line that is both in the pipe and
+    // past the end of imem still shows the red that matters more.
+    for (const PipelineMark& mark : pipeline_) {
+        QTextBlock block = document()->findBlockByNumber(mark.line - 1);
+        if (!block.isValid()) continue;
+        QTextEdit::ExtraSelection tint;
+        tint.format.setBackground(stage_tint(mark.depth));
+        tint.format.setProperty(QTextFormat::FullWidthSelection, true);
+        tint.cursor = QTextCursor(block);
+        tint.cursor.clearSelection();
+        selections.append(tint);
+    }
+
     // Lines that fall past the end of the memory they belong in, in red
     // across the whole width. Not an error -- what is written is valid, there
     // is simply nowhere to put it -- so it marks rather than stops, and a
@@ -566,6 +597,12 @@ void EditorWidget::set_execution_line(int line) {
 void EditorWidget::set_breakpoint_lines(std::vector<int> lines) {
     breakpoints_ = std::move(lines);
     gutter_->update();
+}
+
+void EditorWidget::set_pipeline_lines(std::vector<PipelineMark> marks) {
+    if (marks == pipeline_) return;
+    pipeline_ = std::move(marks);
+    highlight_current_line();
 }
 
 int EditorWidget::current_line() const { return textCursor().blockNumber() + 1; }

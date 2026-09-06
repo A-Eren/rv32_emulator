@@ -21,6 +21,19 @@ namespace rv::gui {
 
 class EditorWidget;
 
+/// A source line with an instruction in flight, and how far down the pipe that
+/// instruction has got: 0 is the stage it was just fetched into, 4 the one it
+/// is about to fall out of. The editor turns the depth into a shade; it does
+/// not need to know what the stages are called.
+struct PipelineMark {
+    int line = 0;
+    int depth = 0;
+
+    bool operator==(const PipelineMark& other) const {
+        return line == other.line && depth == other.depth;
+    }
+};
+
 /// The small block under the caret listing the instructions that match what is
 /// being typed. It is only up while a mnemonic is being written: once the
 /// instruction is settled the operands take over as ghost text and the block
@@ -100,6 +113,12 @@ public:
     void set_execution_line(int line);
     void set_breakpoint_lines(std::vector<int> lines);
 
+    /// Tint the lines whose instructions are in the pipeline, brightest for the
+    /// one just fetched. An empty list turns the tinting off, which is how the
+    /// menu toggle works.
+    void set_pipeline_lines(std::vector<PipelineMark> marks);
+    const std::vector<PipelineMark>& pipeline_lines() const { return pipeline_; }
+
     int current_line() const;
     void go_to_line(int line);
 
@@ -159,6 +178,7 @@ private:
     std::map<int, as::Diagnostic> diagnostics_;
     std::vector<int> breakpoints_;
     std::vector<int> overflow_;
+    std::vector<PipelineMark> pipeline_;
     QString overflow_reason_;
     int execution_line_ = 0;
 };

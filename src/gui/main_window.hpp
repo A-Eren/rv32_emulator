@@ -69,6 +69,11 @@ public:
     void reset_machine();
     void toggle_breakpoint(int line);
 
+    /// Tint the source lines whose instructions are in the pipeline. On by
+    /// default; the View menu turns it off without touching the panel.
+    void set_pipeline_colours(bool on);
+    bool pipeline_colours() const { return pipeline_colours_; }
+
     dbg::DebugSession& session() { return *session_; }
     EditorWidget& editor() { return *editor_; }
     QString status_text() const;
@@ -111,6 +116,7 @@ private:
     void refresh_symbols();
     void refresh_diagnostics();
     void refresh_status();
+    void refresh_pipeline_marks();
     /// Step the machine through the session, then let the pipeline adopt
     /// wherever it landed.
     void step_through_session(dbg::StepKind kind);
@@ -146,6 +152,8 @@ private:
     QLabel* message_ = nullptr;
 
     QAction* action_back_ = nullptr;
+    QAction* action_pipeline_colours_ = nullptr;
+    bool pipeline_colours_ = true;
 
     /// Drives a long `run` in slices so the window stays responsive without a
     /// worker thread -- speed is not a goal here, and a thread would buy a
