@@ -74,6 +74,11 @@ public:
     void set_pipeline_colours(bool on);
     bool pipeline_colours() const { return pipeline_colours_; }
 
+    /// Colour a branch green or red once it has resolved. Independent of the
+    /// stage marking above, and off leaves a branch looking like anything else.
+    void set_branch_colours(bool on);
+    bool branch_colours() const { return branch_colours_; }
+
     dbg::DebugSession& session() { return *session_; }
     EditorWidget& editor() { return *editor_; }
     QString status_text() const;
@@ -153,7 +158,9 @@ private:
 
     QAction* action_back_ = nullptr;
     QAction* action_pipeline_colours_ = nullptr;
+    QAction* action_branch_colours_ = nullptr;
     bool pipeline_colours_ = true;
+    bool branch_colours_ = true;
 
     /// Drives a long `run` in slices so the window stays responsive without a
     /// worker thread -- speed is not a goal here, and a thread would buy a

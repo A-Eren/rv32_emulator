@@ -1205,3 +1205,47 @@ RV_TEST(gui, a_flushed_line_stops_being_tinted_at_once) {
     RV_CHECK_EQ(depth_of(fixture.editor(), 3), -1);
     RV_CHECK_EQ(depth_of(fixture.editor(), 4), 0);  // the target, fetched instead
 }
+
+RV_TEST(gui, a_source_line_step_leaves_every_stage_filled) {
+    // Driving with Step rather than Step Cycle used to leave MEM and WB empty.
+    Fixture fixture;
+    fixture.window.step_line();  // li a0, 1
+    fixture.window.step_line();  // li a1, 0x12345 -- two instructions
+
+    auto* panel = fixture.window.findChild<PipelineWidget*>();
+    RV_CHECK(panel != nullptr);
+    RV_CHECK(!has(panel->stage_summary(), "MEM=-"));
+    RV_CHECK(!has(panel->stage_summary(), "WB=-"));
+}
+
+RV_TEST(gui, only_the_finishing_line_is_coloured_the_rest_are_named) {
+    Fixture fixture;
+    for (int i = 0; i < 5; ++i) fixture.window.step_cycle();
+
+    // Line 4's instruction has reached the last stage, and that is the one line
+    // with a colour; the others are marked in the margin by name.
+    const PipelineMark* finishing = fixture.editor().pipeline_mark(4);
+    RV_CHECK(finishing != nullptr);
+    RV_CHECK_EQ(finishing->depth, 4);
+    RV_CHECK(fixture.editor().pipeline_mark(5) != nullptr);
+    RV_CHECK_NE(fixture.editor().pipeline_mark(5)->depth, 4);
+}
+
+RV_TEST(gui, the_branch_colours_turn_off_on_their_own) {
+    Fixture fixture(
+        "_start: li   a0, 0\n"
+        "        beq  a0, x0, out\n"
+        "        li   a1, 99\n"
+        "out:    ebreak\n");
+    for (int i = 0; i < 4; ++i) fixture.window.step_cycle();
+    RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::Taken);
+
+    fixture.window.set_branch_colours(false);
+    RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::Pending);
+    // The stage marking itself is untouched -- the two are independent.
+    RV_CHECK_EQ(depth_of(fixture.editor(), 2), 2);
+    RV_CHECK(fixture.window.pipeline_colours());
+
+    fixture.window.set_branch_colours(true);
+    RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::Taken);
+}

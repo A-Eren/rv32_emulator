@@ -88,7 +88,8 @@ Standard editing keys, plus:
 | Key | What it does |
 |---|---|
 | `Ctrl+N` / `Ctrl+O` / `Ctrl+S` | New, open, save |
-| `Ctrl+Shift+P` | Turn the pipeline colours on the code on or off |
+| `Ctrl+Shift+P` | Turn the pipeline marks on the code on or off |
+| `Ctrl+Shift+B` | Turn the green/red branch colours on or off |
 | Click the margin | Toggle a breakpoint on that line |
 | Click a diagnostic | Jump to the line it points at |
 
@@ -115,42 +116,42 @@ broken edit never destroys the program you are already stepping.
 
 ### The pipeline, drawn on the code itself
 
-The same five stages are shown on the source lines, so the pipeline can be read
-without looking away from what was written. The line whose instruction was just
-fetched is the brightest, and each line fades a shade as its instruction moves
-down the pipe — the trail is the last five cycles of work, faintest at the end.
+The five stages are marked on the source lines, so the pipeline can be read
+without looking away from what was written. **Named, not shaded**: the stage
+sits in the margin next to the line number, in the colour the panel gives it.
 
 ```
-        add     t3, t0, t1      ← in WB,  faintest yellow
-        mv      t0, t1          ← in MEM
-        mv      t1, t3          ← in EX,  where it commits
-        addi    t2, t2, 1       ← in ID
-        j       loop            ← in IF,  brightest
+ 22 ME      bge     t2, s0, done
+ 23 EX      add     t3, t0, t1
+ 24 ID      mv      t0, t1
+ 25 IF      mv      t1, t3
 ```
 
-**A branch says which way it went.** Green if it was taken, red if it fell
-through — and only from EX onward, because that is the first moment the machine
-has an answer. In IF and ID a branch is ordinary yellow like everything else,
-since nothing is known yet. A resolved branch is drawn stronger than the
-ordinary fade would leave it, because EX is where the yellow has already gone
-faint and the decision is the thing worth seeing.
+Exactly two things get a colour across the whole line, so there is never a set
+of shades to rank by eye:
 
-```
-        bge     t2, s0, done    ← RED,   fell through
-        add     t3, t0, t1
-        ...
-        j       loop            ← GREEN, taken
-```
+- **The line that has just finished** — the one in write-back — in yellow.
+  There is only ever one.
+- **A branch that has resolved**, green if it was taken and red if it fell
+  through. Only from EX onward, because that is the first cycle the machine has
+  an answer; before that a branch is marked like anything else, since claiming
+  to know earlier would be a prediction and there is no predictor here.
 
-**The shading follows the stages, not the source.** A line holding a two-word
+The marking follows the stages, not the source. A line holding a two-word
 pseudo-instruction like `li a0, 0x12345` shows its *most advanced* instruction:
 with the `lui` in EX and the `addi` still in ID, the line is at EX, because that
 is where the pipeline has got to on it. And a line fetched on the wrong side of
-a branch loses its tint the moment the branch resolves, so nothing is left
-glowing on code that never ran.
+a branch loses its mark the moment the branch resolves, so nothing is left
+marked on code that never ran.
 
-**View ▸ Pipeline colours in the editor** (`Ctrl+Shift+P`) turns it off. The
-panel is unaffected either way — the two halves are independent.
+Both halves are optional and independent, under **View**:
+
+| | |
+|---|---|
+| Pipeline colours in the editor (`Ctrl+Shift+P`) | The stage names and the yellow finishing line |
+| Green and red on a resolved branch (`Ctrl+Shift+B`) | Just the branch colours |
+
+The panel is unaffected by either.
 
 ### The pipeline is a picture, not a timing model
 

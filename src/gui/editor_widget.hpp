@@ -123,6 +123,9 @@ public:
     /// menu toggle works.
     void set_pipeline_lines(std::vector<PipelineMark> marks);
     const std::vector<PipelineMark>& pipeline_lines() const { return pipeline_; }
+    /// What is in flight on `line`, or null. Used by the gutter, and by the
+    /// tests to ask what a line is showing.
+    const PipelineMark* pipeline_mark(int line) const;
 
     int current_line() const;
     void go_to_line(int line);

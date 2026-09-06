@@ -16,33 +16,45 @@ namespace {
 constexpr int kMarkerColumns = 2;  // breakpoint dot, execution arrow
 constexpr int kGutterPadding = 8;
 
-/// The trail an instruction leaves as it moves down the pipe: one hue, mixed
-/// into the editor's own background more weakly the further along the
-/// instruction is, so the line just fetched is the brightest and the eye
-/// follows the newest work. A different hue per *stage* would compete with the
-/// syntax colouring; a fade does not, which leaves hue free to carry the one
-/// thing worth saying in colour -- which way a branch went.
-QColor stage_tint(int depth, PipelineTone tone) {
-    static constexpr double kPending[] = {0.52, 0.38, 0.26, 0.16, 0.09};
-    // A branch can only be known from EX onward -- which is exactly where the
-    // ordinary fade has gone faint. A resolved branch is the one thing on this
-    // screen worth seeing from across the room, so it gets a curve of its own
-    // that peaks where the answer arrives and fades from there.
-    static constexpr double kResolved[] = {0.52, 0.38, 0.50, 0.38, 0.26};
+/// How far along the last stage is. Its line is the one that gets a colour.
+constexpr int kLastStage = 4;
+constexpr int kStageColumns = 3;  // two letters and a space before the code
 
-    // Yellow while nothing is decided. Green and red once a branch has run.
-    QColor lit(0xff, 0xe1, 0x4a);
-    if (tone == PipelineTone::Taken) lit = QColor(0x5c, 0xf2, 0x8a);
-    if (tone == PipelineTone::NotTaken) lit = QColor(0xff, 0x6b, 0x6b);
+const char* stage_label(int depth) {
+    static const char* const kNames[] = {"IF", "ID", "EX", "ME", "WB"};
+    return kNames[std::clamp(depth, 0, kLastStage)];
+}
 
-    const int step = std::clamp(depth, 0, 4);
-    const double mix = tone == PipelineTone::Pending ? kPending[step] : kResolved[step];
-    const QColor ground(0x1e, 0x21, 0x27);
-    const auto blend = [mix](int back, int front) {
-        return static_cast<int>(back + (front - back) * mix + 0.5);
+/// The panel's colours, so a name in the margin and a box in the panel are
+/// recognisably the same stage.
+QColor stage_ink(int depth) {
+    static const QColor kInk[] = {
+        QColor(0x6c, 0xb6, 0xff),  // IF
+        QColor(0x5b, 0xd6, 0xc8),  // ID
+        QColor(0x89, 0xd1, 0x85),  // EX
+        QColor(0xe8, 0xa0, 0x4e),  // MEM
+        QColor(0xc5, 0x92, 0xdd),  // WB
     };
-    return QColor(blend(ground.red(), lit.red()), blend(ground.green(), lit.green()),
-                  blend(ground.blue(), lit.blue()));
+    return kInk[std::clamp(depth, 0, kLastStage)];
+}
+
+/// Only two things earn a background across the whole line.
+///
+/// The line that has just finished -- write-back -- in yellow, so there is
+/// exactly one of them at a time and nothing to measure. Five shades of one
+/// hue asked the eye to rank brightness, which it is bad at; the stage names
+/// in the margin say the same thing without the guessing.
+///
+/// And a branch that has resolved, in green or red, because which way it went
+/// is the one thing here worth seeing from across the room. An invalid colour
+/// means the line is named in the margin and otherwise left alone.
+QColor line_tint(const PipelineMark& mark) {
+    switch (mark.tone) {
+        case PipelineTone::Taken: return QColor(0x38, 0x79, 0x51);
+        case PipelineTone::NotTaken: return QColor(0x7d, 0x40, 0x44);
+        case PipelineTone::Pending: break;
+    }
+    return mark.depth == kLastStage ? QColor(0x78, 0x6e, 0x35) : QColor();
 }
 
 QColor colour_for(as::Severity severity) {
@@ -232,7 +244,8 @@ int EditorWidget::gutter_width() const {
     for (int lines = blockCount(); lines >= 100; lines /= 10) ++digits;
     const int digit_width = fontMetrics().horizontalAdvance(QLatin1Char('9'));
     const int marker_width = fontMetrics().horizontalAdvance(QLatin1Char('M'));
-    return kGutterPadding + kMarkerColumns * marker_width + digits * digit_width + kGutterPadding;
+    return kGutterPadding + kMarkerColumns * marker_width + digits * digit_width +
+           kStageColumns * digit_width + kGutterPadding;
 }
 
 void EditorWidget::update_gutter_width() { setViewportMargins(gutter_width(), 0, 0, 0); }
@@ -490,10 +503,24 @@ void EditorWidget::paint_gutter(QPaintEvent* event) {
             }
             x += marker_width;
 
+            const int stage_width =
+                kStageColumns * fontMetrics().horizontalAdvance(QLatin1Char('9'));
+
             painter.setPen(line == current_line() ? QColor(0xd6, 0xd6, 0xd6)
                                                   : QColor(0x6a, 0x71, 0x7c));
-            painter.drawText(QRect(x, top, gutter_->width() - x - kGutterPadding, height),
-                             Qt::AlignRight | Qt::AlignVCenter, QString::number(line));
+            painter.drawText(
+                QRect(x, top, gutter_->width() - x - kGutterPadding - stage_width, height),
+                Qt::AlignRight | Qt::AlignVCenter, QString::number(line));
+
+            // Which stage this line's instruction is in, named rather than
+            // shaded, in the colour the panel gives that stage.
+            if (const PipelineMark* mark = pipeline_mark(line); mark != nullptr) {
+                painter.setPen(stage_ink(mark->depth));
+                painter.drawText(
+                    QRect(gutter_->width() - kGutterPadding - stage_width, top, stage_width,
+                          height),
+                    Qt::AlignRight | Qt::AlignVCenter, stage_label(mark->depth));
+            }
         }
 
         block = block.next();
@@ -511,14 +538,16 @@ void EditorWidget::highlight_current_line() {
     line.cursor.clearSelection();
     selections.append(line);
 
-    // The lines whose instructions are in flight, tinted by how far along they
-    // are. Before the overflow marks, so a line that is both in the pipe and
-    // past the end of imem still shows the red that matters more.
+    // The two lines that get a colour: the one finishing, and a branch that has
+    // resolved. Before the overflow marks, so a line that is both in the pipe
+    // and past the end of imem still shows the red that matters more.
     for (const PipelineMark& mark : pipeline_) {
+        const QColor colour = line_tint(mark);
+        if (!colour.isValid()) continue;
         QTextBlock block = document()->findBlockByNumber(mark.line - 1);
         if (!block.isValid()) continue;
         QTextEdit::ExtraSelection tint;
-        tint.format.setBackground(stage_tint(mark.depth, mark.tone));
+        tint.format.setBackground(colour);
         tint.format.setProperty(QTextFormat::FullWidthSelection, true);
         tint.cursor = QTextCursor(block);
         tint.cursor.clearSelection();
@@ -615,6 +644,14 @@ void EditorWidget::set_pipeline_lines(std::vector<PipelineMark> marks) {
     if (marks == pipeline_) return;
     pipeline_ = std::move(marks);
     highlight_current_line();
+    gutter_->update();
+}
+
+const PipelineMark* EditorWidget::pipeline_mark(int line) const {
+    for (const PipelineMark& mark : pipeline_) {
+        if (mark.line == line) return &mark;
+    }
+    return nullptr;
 }
 
 int EditorWidget::current_line() const { return textCursor().blockNumber() + 1; }

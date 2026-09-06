@@ -286,12 +286,28 @@ void MainWindow::build_actions() {
     action_pipeline_colours_->setChecked(pipeline_colours_);
     action_pipeline_colours_->setShortcut(QKeySequence("Ctrl+Shift+P"));
     connect(action_pipeline_colours_, &QAction::toggled, this, &MainWindow::set_pipeline_colours);
+
+    action_branch_colours_ = view_menu->addAction("Green and red on a resolved branch");
+    action_branch_colours_->setCheckable(true);
+    action_branch_colours_->setChecked(branch_colours_);
+    action_branch_colours_->setShortcut(QKeySequence("Ctrl+Shift+B"));
+    connect(action_branch_colours_, &QAction::toggled, this, &MainWindow::set_branch_colours);
 }
 
 void MainWindow::set_pipeline_colours(bool on) {
     pipeline_colours_ = on;
     if (action_pipeline_colours_ != nullptr && action_pipeline_colours_->isChecked() != on) {
         action_pipeline_colours_->setChecked(on);
+    }
+    // With nothing marked at all there is no branch to colour either.
+    if (action_branch_colours_ != nullptr) action_branch_colours_->setEnabled(on);
+    refresh_pipeline_marks();
+}
+
+void MainWindow::set_branch_colours(bool on) {
+    branch_colours_ = on;
+    if (action_branch_colours_ != nullptr && action_branch_colours_->isChecked() != on) {
+        action_branch_colours_->setChecked(on);
     }
     refresh_pipeline_marks();
 }
@@ -332,7 +348,8 @@ void MainWindow::refresh_pipeline_marks() {
         if (!line.has_value()) continue;
 
         const int number = static_cast<int>(*line);
-        const PipelineMark mark{number, static_cast<int>(depth), tone_of(slot)};
+        const PipelineMark mark{number, static_cast<int>(depth),
+                                branch_colours_ ? tone_of(slot) : PipelineTone::Pending};
         const auto found = deepest.find(number);
         if (found == deepest.end() || mark.depth > found->second.depth) deepest[number] = mark;
     }

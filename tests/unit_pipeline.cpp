@@ -286,3 +286,58 @@ RV_TEST(pipeline, the_diagram_records_a_row_per_cycle) {
     RV_CHECK(pipeline.history().back().committed);
     RV_CHECK(!pipeline.history().front().committed);
 }
+
+RV_TEST(pipeline, resync_rebuilds_the_stages_behind_the_pc) {
+    // The bug this guards. A step driven through the session used to leave MEM
+    // and WB empty, so anyone who drove with Step or Run rather than Step Cycle
+    // never saw those two stages at all. The machine really did have three
+    // instructions behind the pc; the view just was not asking.
+    DebugSession session = make_session(
+        "        addi a0, x0, 1\n"
+        "        xor  a1, a0, a0\n"
+        "        sll  a2, a0, a0\n"
+        "        or   a3, a0, a0\n"
+        "        ebreak\n");
+    Pipeline pipeline(session);
+
+    for (int i = 0; i < 3; ++i) session.step(StepKind::Instruction);
+    pipeline.resync();
+
+    RV_CHECK_STR(spelling(pipeline, Stage::WB), "addi");  // oldest of the three
+    RV_CHECK_STR(spelling(pipeline, Stage::MEM), "xor");
+    RV_CHECK_STR(spelling(pipeline, Stage::EX), "sll");   // the one that just ran
+    RV_CHECK_STR(spelling(pipeline, Stage::ID), "or");    // and what is next
+    RV_CHECK_STR(spelling(pipeline, Stage::IF), "ebreak");
+}
+
+RV_TEST(pipeline, resync_fills_only_as_far_back_as_the_history_goes) {
+    DebugSession session = make_session(kStraightLine);
+    Pipeline pipeline(session);
+
+    session.step(StepKind::Instruction);
+    pipeline.resync();
+
+    RV_CHECK_STR(spelling(pipeline, Stage::EX), "addi");
+    RV_CHECK(!pipeline.at(Stage::MEM).valid);
+    RV_CHECK(!pipeline.at(Stage::WB).valid);
+}
+
+RV_TEST(pipeline, resync_recovers_which_way_a_branch_went) {
+    // Rebuilding the stages behind the pc has to rebuild the branch decision
+    // too, or a branch would lose its colour the moment you pressed Step.
+    DebugSession session = make_session(
+        "        addi a0, x0, 0\n"
+        "        beq  a0, x0, target\n"
+        "        addi a1, x0, 99\n"
+        "target:\n"
+        "        addi a3, x0, 7\n"
+        "        ebreak\n");
+    Pipeline pipeline(session);
+
+    for (int i = 0; i < 3; ++i) session.step(StepKind::Instruction);
+    pipeline.resync();
+
+    RV_CHECK_STR(spelling(pipeline, Stage::MEM), "beq");
+    RV_CHECK(pipeline.at(Stage::MEM).redirected);
+    RV_CHECK(!pipeline.at(Stage::EX).redirected);  // the addi it landed on
+}

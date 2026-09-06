@@ -60,6 +60,11 @@ public:
     /// does something approximate.
     bool undo(core::Hart& hart);
 
+    /// The `back`th most recent record, 0 being the step that just ran, or null
+    /// past what is still kept. Read-only, and deliberately narrow: a view that
+    /// needs to know what is behind the pc should not be able to move it.
+    const StepDelta* recent(std::size_t back) const;
+
     bool can_undo() const { return depth_ > 0; }
     std::size_t depth() const { return depth_; }
     std::size_t capacity() const { return deltas_.size(); }

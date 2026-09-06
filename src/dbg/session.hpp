@@ -50,6 +50,13 @@ struct StopEvent {
     core::TrapCause cause = core::TrapCause::None;
 };
 
+/// One instruction as it was recorded, for a view that needs to see what is
+/// behind the pc without disturbing it.
+struct RecentStep {
+    Addr pc = 0;
+    Word raw = 0;
+};
+
 /// One register that changed in the last step, for diff highlighting.
 struct RegChange {
     RegIdx index = 0;
@@ -121,6 +128,15 @@ public:
     /// executor's record, not recovered by diffing all 32.
     const std::vector<RegChange>& last_changes() const { return last_changes_; }
     const core::StepOutcome& last_step() const { return last_step_; }
+
+    /// The instruction that ran `back` steps ago, 0 being the most recent.
+    /// Empty past the recorded horizon. The pipeline view rebuilds the stages
+    /// behind the pc from this after a step it did not drive itself.
+    std::optional<RecentStep> recent_step(std::size_t back) const {
+        const StepDelta* delta = history_.recent(back);
+        if (delta == nullptr) return std::nullopt;
+        return RecentStep{delta->pc_before, delta->raw};
+    }
 
     const std::string& uart_output() const { return hart_.bus().uart_output(); }
 

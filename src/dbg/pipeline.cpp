@@ -46,19 +46,39 @@ void Pipeline::reset() {
 void Pipeline::resync() {
     start_over();
 
-    // Put back what is knowable. The instruction that just ran goes where it
-    // ran, and the next two go where they would have been fetched to. That
-    // keeps the rule tick() relies on: the instruction arriving in EX is the
-    // one at the pc.
-    const core::StepOutcome& last = session_->last_step();
-    if (last.instr.valid()) {
-        Slot& ex = slots_[index_of(Stage::EX)];
-        ex.valid = true;
-        ex.pc = last.pc_before;
-        ex.raw = last.raw;
-        ex.instr = last.instr;
-        ex.serial = next_serial_++;
-        ex.committed = true;
+    // Put back what the machine really has behind it. A step driven through the
+    // session ran whole instructions back to back, so a real pipe would be
+    // full behind the pc -- and the last three to commit are exactly what
+    // would still be in EX, MEM and WB. Recovering them from the recorded
+    // history is what keeps those two stages from sitting empty for anyone who
+    // never presses Step Cycle.
+    struct Behind {
+        std::size_t back;
+        Stage stage;
+    };
+    // Oldest first, so serial numbers still run in the order things were
+    // fetched.
+    static constexpr Behind kBehind[] = {{2, Stage::WB}, {1, Stage::MEM}, {0, Stage::EX}};
+
+    for (const Behind& behind : kBehind) {
+        const std::optional<RecentStep> ran = session_->recent_step(behind.back);
+        if (!ran.has_value()) continue;
+
+        Slot& slot = slots_[index_of(behind.stage)];
+        slot.valid = true;
+        slot.pc = ran->pc;
+        slot.raw = ran->raw;
+        slot.instr = isa::decode(ran->raw);
+        slot.serial = next_serial_++;
+        slot.committed = true;
+
+        // Where the pc went next: the instruction after this one, or the pc
+        // itself for the most recent. That is what says whether a branch here
+        // was taken.
+        const std::optional<RecentStep> next =
+            behind.back == 0 ? std::nullopt : session_->recent_step(behind.back - 1);
+        const Addr after = next.has_value() ? next->pc : session_->cpu().pc;
+        slot.redirected = after != slot.pc + slot.instr.length;
     }
 
     fetch_pc_ = session_->cpu().pc;
