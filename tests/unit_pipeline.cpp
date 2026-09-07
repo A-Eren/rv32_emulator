@@ -408,3 +408,76 @@ RV_TEST(pipeline, a_register_jump_is_not_guessed_at_all) {
     RV_CHECK_HEX(session.cpu().x[11], 0u);
     RV_CHECK_HEX(session.cpu().x[12], 7u);
 }
+
+RV_TEST(pipeline, compressed_control_flow_is_guessed_the_same_way) {
+    // Two-byte instructions, so the addresses step by 2 and the fall-through
+    // is pc + 2 -- but the target is still pc plus the immediate, and nothing
+    // about the guess changes except the arithmetic. Getting the width wrong
+    // would show up here as a branch that never seems to be predicted right.
+    DebugSession session = make_session(
+        "        c.li   a0, 2\n"
+        "loop:\n"
+        "        c.addi a0, -1\n"
+        "        c.bnez a0, loop\n"
+        "        c.j    done\n"
+        "        c.li   a1, 31\n"   // never runs
+        "done:\n"
+        "        c.li   a2, 7\n"
+        "        ebreak\n");
+    Pipeline pipeline(session);
+
+    const auto loop = session.lookup_symbol("loop");
+    RV_CHECK(loop.has_value());
+
+    // Five cycles puts the c.bnez in EX with its target already computed.
+    for (int i = 0; i < 5; ++i) pipeline.tick();
+    RV_CHECK_STR(spelling(pipeline, Stage::EX), "c.bnez");
+    RV_CHECK_EQ(pipeline.at(Stage::EX).instr.length, u8{2});
+    RV_CHECK(pipeline.at(Stage::EX).predicted);
+    RV_CHECK_HEX(pipeline.at(Stage::EX).predicted_pc, *loop);
+
+    // Two more and it retires, taken, with the guess right.
+    for (int i = 0; i < 2; ++i) pipeline.tick();
+    RV_CHECK_STR(spelling(pipeline, Stage::WB), "c.bnez");
+    RV_CHECK(pipeline.at(Stage::WB).redirected);
+    RV_CHECK(!pipeline.last_mispredicted());
+
+    run_out(pipeline, session);
+    RV_CHECK_HEX(session.cpu().x[10], 0u);   // the loop ran itself out
+    RV_CHECK_HEX(session.cpu().x[11], 0u);   // and c.j skipped the c.li
+    RV_CHECK_HEX(session.cpu().x[12], 7u);
+}
+
+RV_TEST(pipeline, ticking_matches_stepping_for_compressed_control_flow) {
+    // The same guard as for the 32-bit case, on a program that is all
+    // 16-bit instructions and all branches and jumps.
+    const std::string program =
+        "        c.li   a0, 5\n"
+        "        c.li   a1, 0\n"
+        "loop:\n"
+        "        c.add  a1, a0\n"
+        "        c.addi a0, -1\n"
+        "        c.bnez a0, loop\n"
+        "        c.j    done\n"
+        "        c.li   a1, 31\n"
+        "done:\n"
+        "        c.li   a2, 7\n"
+        "        ebreak\n";
+
+    DebugSession ticked = make_session(program);
+    Pipeline pipeline(ticked);
+    run_out(pipeline, ticked);
+
+    DebugSession stepped = make_session(program);
+    for (int i = 0; i < 20'000 && !stepped.halted(); ++i) {
+        stepped.step(StepKind::Instruction);
+    }
+
+    RV_CHECK_HEX(ticked.cpu().pc, stepped.cpu().pc);
+    RV_CHECK_EQ(ticked.cpu().cycle, stepped.cpu().cycle);
+    RV_CHECK_EQ(ticked.cpu().instret, stepped.cpu().instret);
+    for (RegIdx reg = 0; reg < kNumRegs; ++reg) {
+        RV_CHECK_HEX(ticked.cpu().x[reg], stepped.cpu().x[reg]);
+    }
+    RV_CHECK_HEX(ticked.cpu().x[11], 15u);  // 5+4+3+2+1
+}

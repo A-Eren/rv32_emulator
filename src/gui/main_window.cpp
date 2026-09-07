@@ -107,7 +107,7 @@ void MainWindow::build_layout() {
         QFontMetrics(mono()).height() + 4);
     registers_->setShowGrid(false);
 
-    encoding_ = new EncodingWidget(*session_, this);
+    encoding_ = new EncodingWidget(*session_, &pipeline_model_, this);
     pipeline_ = new PipelineWidget(pipeline_model_, *session_, this);
 
     const auto make_text = [this] {
@@ -324,6 +324,19 @@ PipelineTone tone_of(const dbg::Slot& slot) {
 }
 
 }  // namespace
+
+// Where the arrow in the margin points: at the line that just wrote back, so
+// that it, the yellow mark and the encoding panel all agree. Before anything
+// has run there is nothing in write-back, and the pc is the honest answer.
+int MainWindow::execution_line() const {
+    const dbg::Slot& retired = pipeline_model_.at(dbg::Stage::WB);
+    if (retired.valid) {
+        if (const std::optional<u32> line = session_->map().line_of(retired.pc)) {
+            return static_cast<int>(*line);
+        }
+    }
+    return static_cast<int>(session_->current_line().value_or(0));
+}
 
 // Which source lines have an instruction in flight, and how far along it is.
 //
@@ -579,7 +592,7 @@ void MainWindow::refresh_all() {
         if (breakpoint.enabled) breakpoints.push_back(static_cast<int>(breakpoint.line));
     }
     editor_->set_breakpoint_lines(std::move(breakpoints));
-    editor_->set_execution_line(static_cast<int>(session_->current_line().value_or(0)));
+    editor_->set_execution_line(execution_line());
 
     action_back_->setEnabled(pipeline_model_.can_reverse());
     refresh_pipeline_marks();

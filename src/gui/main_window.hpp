@@ -122,6 +122,7 @@ private:
     void refresh_diagnostics();
     void refresh_status();
     void refresh_pipeline_marks();
+    int execution_line() const;
     void report_stop(const dbg::StopEvent& event);
     void set_message(const QString& text, bool is_error = false);
     bool confirm_discard();

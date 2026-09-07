@@ -145,19 +145,39 @@ RV_TEST(gui, the_changed_register_is_marked_rather_than_merely_updated) {
     RV_CHECK(!table->item(11, 1)->font().bold());
 }
 
-RV_TEST(gui, the_execution_arrow_follows_the_pc) {
+RV_TEST(gui, the_execution_arrow_points_at_what_wrote_back) {
+    // Not at the pc: by the time an instruction retires the pc is four stages
+    // further on, and an arrow there would point at code that has not run.
     Fixture fixture;
-    RV_CHECK_EQ(fixture.session().current_line().value_or(0), 4u);
+    RV_CHECK_EQ(fixture.editor().execution_line(), 4);  // nothing has run yet
 
-    step_to_next_line(fixture.window);
-    RV_CHECK_EQ(fixture.session().current_line().value_or(0), 5u);
+    // Five cycles retires the first instruction, on line 4.
+    for (int i = 0; i < 5; ++i) fixture.window.step();
+    RV_CHECK_EQ(fixture.editor().execution_line(), 4);
+    RV_CHECK_EQ(fixture.session().current_line().value_or(0), 5u);  // the pc is ahead
+
+    fixture.window.step();
+    RV_CHECK_EQ(fixture.editor().execution_line(), 5);
+}
+
+RV_TEST(gui, the_encoding_panel_explains_what_wrote_back) {
+    // The panel says what an instruction did, so it has to be looking at the
+    // one that did it -- the instruction in write-back, not the one at the pc.
+    Fixture fixture;
+    auto* encoding = fixture.window.findChild<EncodingWidget*>();
+    RV_CHECK(encoding != nullptr);
+
+    // `_start: li a0, 1` is line 4 and assembles to a single addi.
+    for (int i = 0; i < 5; ++i) fixture.window.step();
+    const QStringList fields = encoding->field_summary();
+    RV_CHECK(has(fields, "rd=x10 (a0)"));
+    RV_CHECK(has(fields, "imm[11:0]=1"));
 }
 
 RV_TEST(gui, stepping_by_cycle_lands_inside_a_pseudo) {
-    // `li a1, 0x12345` is really two instructions, and cycle stepping still
-    // shows the seam. Only one cycle is needed here rather than the three a
-    // cold pipe takes: a source-line step leaves the pipe as full as the
-    // machine really left it, so the next instruction is already in ID.
+    // `li a1, 0x12345` is really two instructions, and cycling lands on the
+    // seam without being asked to: one cycle past the end of line 4 puts the
+    // pc on the second half of line 5.
     Fixture fixture;
     step_to_next_line(fixture.window);  // onto the li
 

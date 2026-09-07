@@ -203,8 +203,9 @@ QString binary_of(u32 word, int hi, int lo) {
 
 }  // namespace
 
-EncodingWidget::EncodingWidget(const dbg::DebugSession& session, QWidget* parent)
-    : QWidget(parent), session_(&session) {
+EncodingWidget::EncodingWidget(const dbg::DebugSession& session, const dbg::Pipeline* pipeline,
+                               QWidget* parent)
+    : QWidget(parent), session_(&session), pipeline_(pipeline) {
     QFont font = QFontDatabase::systemFont(QFontDatabase::FixedFont);
     font.setPointSize(10);
     setFont(font);
@@ -223,7 +224,15 @@ void EncodingWidget::follow_pc() {
 }
 
 Addr EncodingWidget::shown_address() const {
-    return follow_pc_ ? session_->cpu().pc : address_;
+    if (!follow_pc_) return address_;
+    // The instruction in write-back is the one that just ran, and the one whose
+    // effect this panel describes. The pc has moved on to what is still four
+    // stages from retiring, so following it would explain the wrong line.
+    if (pipeline_ != nullptr) {
+        const dbg::Slot& retired = pipeline_->at(dbg::Stage::WB);
+        if (retired.valid) return retired.pc;
+    }
+    return session_->cpu().pc;
 }
 
 QSize EncodingWidget::sizeHint() const { return QSize(600, 160); }

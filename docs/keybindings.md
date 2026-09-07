@@ -141,6 +141,12 @@ of shades to rank by eye:
   like anything else — the front-end has *guessed* by then, but a guess is not
   an answer.
 
+**Everything on screen agrees about write-back.** The arrow in the margin, the
+yellow line, and the Encoding panel all point at the instruction that just wrote
+back — not at the pc, which by then is four stages further on and sitting on
+code that has not run. The status bar still reports the pc, because that is what
+a pc is.
+
 The marking follows the stages, not the source. A line holding a two-word
 pseudo-instruction like `li a0, 0x12345` shows its *most advanced* instruction:
 with the `lui` in EX and the `addi` still in ID, the line is at EX, because that

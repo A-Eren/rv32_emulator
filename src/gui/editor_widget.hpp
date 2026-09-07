@@ -116,6 +116,8 @@ public:
     const std::vector<int>& overflow_lines() const { return overflow_; }
 
     void set_execution_line(int line);
+    /// The line the arrow in the margin is on. 0 when there is none.
+    int execution_line() const { return execution_line_; }
     void set_breakpoint_lines(std::vector<int> lines);
 
     /// Tint the lines whose instructions are in the pipeline, brightest for the
