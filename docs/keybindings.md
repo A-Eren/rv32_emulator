@@ -1,7 +1,8 @@
 # Keys
 
 `rv32-gui <file.s>` opens the desktop window. Everything below is also on the
-toolbar and in the **Run** menu, so nothing here has to be memorised first.
+toolbar and in the **Run** and **View** menus, so nothing here has to be
+memorised first.
 
 ## Running
 
@@ -110,8 +111,8 @@ broken edit never destroys the program you are already stepping.
 | Panel | |
 |---|---|
 | Registers | Both spellings (`x10  a0`), zeros dimmed, and the register the last step wrote highlighted **and scrolled into view** |
-| Encoding | The instruction as labelled bitfields, and what it did. A compressed instruction is drawn at 16 bits, with the base instruction it expands to underneath. Follows the caret, so a line explains itself before it has ever run |
-| Pipeline | The five stages — `IF ID EX MEM WB` — with the instruction in each, and underneath them the space-time diagram: one row per instruction, one column per cycle. Each stage keeps its own colour. A branch that goes the other way leaves its wrong-path fetch stopped partway across the diagram, which is what a flush looks like |
+| Encoding | The instruction as labelled bitfields, and what it did. A compressed instruction is drawn at 16 bits, with the base instruction it expands to underneath. Follows the instruction in write-back — the one that just ran, and so the one whose effect there is anything to describe — or the caret, so a line can also explain itself before it has ever run |
+| Pipeline | The five stages — `IF ID EX MEM WB` — with the instruction in each, and underneath them the space-time diagram: the last ten cycles, one row per instruction, one column per cycle, each stage in its own colour. An instruction thrown away stops partway across its row, which is what a flush looks like; the header says `mispredicted` on the cycle a guess turns out wrong. The cycle count here is the pipeline's own, not the `cycle` in the status bar |
 | Memory | Data memory, as deep as it actually is, with the two memory sizes above it — this table is what they are a view of. **Editable**: type a hex value into a cell. `Load .mem…` and `Export .mem…` move the whole image in and out |
 | Devices | What is attached, name and type in columns of their own, with each device's controls below. Select a block and its contents appear as memory, with its own `.mem` in and out. **Double-click a name to rename it** |
 | Console | Whatever the program sent to the UART |
@@ -150,9 +151,10 @@ a pc is.
 The marking follows the stages, not the source. A line holding a two-word
 pseudo-instruction like `li a0, 0x12345` shows its *most advanced* instruction:
 with the `lui` in EX and the `addi` still in ID, the line is at EX, because that
-is where the pipeline has got to on it. And a line fetched on the wrong side of
-a branch loses its mark the moment the branch resolves, so nothing is left
-marked on code that never ran.
+is where the pipeline has got to on it. And a line fetched from straight ahead of a
+branch loses its mark the moment EX computes the target and the guess turns the
+front-end around — or, if the guess was wrong, when write-back throws the pipe
+away — so nothing is left marked on code that never ran.
 
 Both halves are optional and independent, under **View**:
 

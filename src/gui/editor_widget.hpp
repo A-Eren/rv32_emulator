@@ -26,9 +26,10 @@ class EditorWidget;
 enum class PipelineTone : unsigned char { Pending, Taken, NotTaken };
 
 /// A source line with an instruction in flight, how far down the pipe that
-/// instruction has got -- 0 is the stage it was just fetched into, 4 the one it
-/// is about to fall out of -- and what it turned out to do. The editor turns
-/// the pair into a shade; it does not need to know what the stages are called.
+/// instruction has got -- 0 is the stage it was just fetched into, 4 the one
+/// where it writes back -- and what it turned out to do. The editor turns that
+/// into a name in the margin, and a background on the two depths worth one; it
+/// does not need to know what the stages are called.
 struct PipelineMark {
     int line = 0;
     int depth = 0;
@@ -120,9 +121,10 @@ public:
     int execution_line() const { return execution_line_; }
     void set_breakpoint_lines(std::vector<int> lines);
 
-    /// Tint the lines whose instructions are in the pipeline, brightest for the
-    /// one just fetched. An empty list turns the tinting off, which is how the
-    /// menu toggle works.
+    /// Mark the lines whose instructions are in the pipeline: the stage named
+    /// in the margin, and a background only on the line writing back or on a
+    /// branch that has resolved. An empty list turns the marking off, which is
+    /// how the menu toggle works.
     void set_pipeline_lines(std::vector<PipelineMark> marks);
     const std::vector<PipelineMark>& pipeline_lines() const { return pipeline_; }
     /// What is in flight on `line`, or null. Used by the gutter, and by the

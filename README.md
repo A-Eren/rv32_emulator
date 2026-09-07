@@ -215,7 +215,7 @@ the command-line debugger is a second shell over the same one.
 rv_isa    instruction table, encode, decode, disassemble    (no dependencies)
  ├── rv_core   registers, memory, MMIO, execute, traps, interrupts
  └── rv_asm    lexer, parser, assembler
-       └── rv_dbg    breakpoints, stepping, reverse step
+       └── rv_dbg    breakpoints, stepping, reverse step, the pipeline view
              └── rv_cmd    command registry + REPL, no Qt
                    ├── rv32-gui   the desktop window
                    └── rv32       the command-line tools
@@ -275,6 +275,11 @@ With no reference toolchain available, correctness comes from three sources:
   platform, driven through the actions the toolbar calls, then asked what it
   shows. No display needed, so it runs in CI, and it exercises the real path
   rather than a parallel one.
+- **The pipeline view against the machine** — a program driven a cycle at a
+  time must end in exactly the state it reaches driven an instruction at a
+  time: pc, `cycle`, `instret` and all 32 registers, for 32-bit and compressed
+  control flow alike. That is what stops a drawing from quietly becoming a
+  second implementation.
 
 ## License
 

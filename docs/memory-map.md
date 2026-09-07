@@ -345,7 +345,10 @@ latency.
 
 The gap is one or two instructions per interrupt, and it is not constant: it
 depends on what happened to be in the pipeline, so the same program shows a
-different skid at different points in its own run. It also **compounds**, when a
+different skid at different points in its own run. The window's Pipeline panel
+draws instructions in flight, but it does not change any of this: the emulator
+still takes an interrupt strictly between instructions, so what the panel shows
+in IF and ID is not something the handler is waiting for. It also **compounds**, when a
 handler rearms the deadline from inside itself — each late start pushes the next
 one later. Measured against the FPGA core this emulator is a reference for, over
 eight ticks of one program, `mtime` at handler entry drifted from 0 to 10.
