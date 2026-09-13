@@ -123,6 +123,17 @@ does zero it before a measurement.
 `time` mirrors `cycle`, which is the honest thing to report for a machine with
 no real clock.
 
+### The counters are not pipeline cycles
+
+`mcycle` counts *instructions* — this hart executes one at a time and there is
+no pipeline underneath it. The desktop window's Pipeline panel draws five stages
+and keeps a cycle count of its own, and the two numbers are deliberately
+different: a cycle the panel spends filling the pipe, or throwing away a
+mispredicted guess, is not a cycle this machine experienced. Nothing a program
+can read is affected by the panel being open. See
+[keybindings.md](keybindings.md) for what it draws and what it is honest
+about.
+
 ## Deliberately absent
 
 Not oversights — each was ruled out because it costs a milestone and buys

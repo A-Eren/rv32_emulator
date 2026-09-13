@@ -25,6 +25,7 @@
 #include "gui/device_panel.hpp"
 #include "gui/editor_widget.hpp"
 #include "gui/encoding_widget.hpp"
+#include "gui/pipeline_widget.hpp"
 #include "asm/lexer.hpp"
 #include "gui/highlighter.hpp"
 #include "gui/main_window.hpp"
@@ -72,6 +73,39 @@ QStringList diagnostic_lines(MainWindow& window) {
     return out;
 }
 
+/// How far down the pipe the instruction on `line` is, or -1 if that line has
+/// nothing in flight.
+int depth_of(EditorWidget& editor, int line) {
+    for (const PipelineMark& mark : editor.pipeline_lines()) {
+        if (mark.line == line) return mark.depth;
+    }
+    return -1;
+}
+
+/// Which way the line's instruction turned out to go, or Pending if the line
+/// has nothing in flight.
+PipelineTone tone_of(EditorWidget& editor, int line) {
+    for (const PipelineMark& mark : editor.pipeline_lines()) {
+        if (mark.line == line) return mark.tone;
+    }
+    return PipelineTone::Pending;
+}
+
+/// Advance until the machine lands on a different source line. The window has
+/// one step and it is a cycle, so a test that wants "the next line" builds it
+/// out of that rather than pretending there is a control for it.
+void step_to_next_line(MainWindow& window) {
+    const std::optional<u32> start = window.session().current_line();
+    for (int guard = 0; guard < 500; ++guard) {
+        window.step();
+        if (window.session().halted()) return;
+        if (window.session().current_line() != start &&
+            window.session().map().is_line_start(window.session().cpu().pc)) {
+            return;
+        }
+    }
+}
+
 bool has(const QStringList& lines, const char* needle) {
     for (const QString& line : lines) {
         if (line.contains(needle)) return true;
@@ -92,7 +126,7 @@ RV_TEST(gui, stepping_updates_the_register_table) {
     Fixture fixture;
     RV_CHECK_STR(register_row(fixture.window, 10, 1).toStdString(), "00000000");
 
-    fixture.window.step_line();
+    step_to_next_line(fixture.window);
     RV_CHECK_STR(register_row(fixture.window, 10, 1).toStdString(), "00000001");
     // Both spellings, because the encoding holds the number and assembly is
     // written with the name.
@@ -102,7 +136,7 @@ RV_TEST(gui, stepping_updates_the_register_table) {
 
 RV_TEST(gui, the_changed_register_is_marked_rather_than_merely_updated) {
     Fixture fixture;
-    fixture.window.step_line();
+    step_to_next_line(fixture.window);
 
     auto* table = fixture.window.findChild<QTableWidget*>();
     RV_CHECK(table != nullptr);
@@ -111,21 +145,43 @@ RV_TEST(gui, the_changed_register_is_marked_rather_than_merely_updated) {
     RV_CHECK(!table->item(11, 1)->font().bold());
 }
 
-RV_TEST(gui, the_execution_arrow_follows_the_pc) {
+RV_TEST(gui, the_execution_arrow_points_at_what_wrote_back) {
+    // Not at the pc: by the time an instruction retires the pc is four stages
+    // further on, and an arrow there would point at code that has not run.
     Fixture fixture;
-    RV_CHECK_EQ(fixture.session().current_line().value_or(0), 4u);
+    RV_CHECK_EQ(fixture.editor().execution_line(), 4);  // nothing has run yet
 
-    fixture.window.step_line();
-    RV_CHECK_EQ(fixture.session().current_line().value_or(0), 5u);
+    // Five cycles retires the first instruction, on line 4.
+    for (int i = 0; i < 5; ++i) fixture.window.step();
+    RV_CHECK_EQ(fixture.editor().execution_line(), 4);
+    RV_CHECK_EQ(fixture.session().current_line().value_or(0), 5u);  // the pc is ahead
+
+    fixture.window.step();
+    RV_CHECK_EQ(fixture.editor().execution_line(), 5);
 }
 
-RV_TEST(gui, stepping_by_instruction_lands_inside_a_pseudo) {
-    // The whole reason the instruction-level step exists: seeing that
-    // `li a1, 0x12345` is really two instructions.
+RV_TEST(gui, the_encoding_panel_explains_what_wrote_back) {
+    // The panel says what an instruction did, so it has to be looking at the
+    // one that did it -- the instruction in write-back, not the one at the pc.
     Fixture fixture;
-    fixture.window.step_line();  // onto the li
+    auto* encoding = fixture.window.findChild<EncodingWidget*>();
+    RV_CHECK(encoding != nullptr);
 
-    fixture.window.step_instruction();
+    // `_start: li a0, 1` is line 4 and assembles to a single addi.
+    for (int i = 0; i < 5; ++i) fixture.window.step();
+    const QStringList fields = encoding->field_summary();
+    RV_CHECK(has(fields, "rd=x10 (a0)"));
+    RV_CHECK(has(fields, "imm[11:0]=1"));
+}
+
+RV_TEST(gui, stepping_by_cycle_lands_inside_a_pseudo) {
+    // `li a1, 0x12345` is really two instructions, and cycling lands on the
+    // seam without being asked to: one cycle past the end of line 4 puts the
+    // pc on the second half of line 5.
+    Fixture fixture;
+    step_to_next_line(fixture.window);  // onto the li
+
+    fixture.window.step();
     RV_CHECK_EQ(fixture.session().current_line().value_or(0), 5u);
     const auto slot = fixture.session().current_slot();
     RV_CHECK(slot.has_value());
@@ -149,15 +205,24 @@ RV_TEST(gui, breakpoints_toggle_and_stop_a_run) {
     RV_CHECK(fixture.session().breakpoints().breakpoints().empty());
 }
 
-RV_TEST(gui, stepping_backwards_undoes_the_last_line) {
+RV_TEST(gui, stepping_backwards_undoes_one_cycle) {
+    // Back is a cycle, so one press lands *inside* the two-instruction
+    // `li a1, 0x12345`: the lui has run and the addi has not, which is the
+    // seam the encoding panel has always been about.
     Fixture fixture;
-    fixture.window.step_line();
-    fixture.window.step_line();
+    step_to_next_line(fixture.window);
+    step_to_next_line(fixture.window);
     RV_CHECK_STR(register_row(fixture.window, 11, 1).toStdString(), "00012345");
 
     fixture.window.step_back();
+    RV_CHECK_STR(register_row(fixture.window, 11, 1).toStdString(), "00012000");
+
+    // And keeping at it walks back out of the line altogether.
+    for (int i = 0; i < 12; ++i) {
+        if (register_row(fixture.window, 11, 1) == "00000000") break;
+        fixture.window.step_back();
+    }
     RV_CHECK_STR(register_row(fixture.window, 11, 1).toStdString(), "00000000");
-    RV_CHECK_EQ(fixture.session().current_line().value_or(0), 5u);
 }
 
 RV_TEST(gui, a_failed_assemble_lists_the_errors_and_keeps_the_text) {
@@ -311,7 +376,7 @@ RV_TEST(gui, the_status_line_says_whether_the_buffer_has_been_built) {
 
     fixture.editor().insertPlainText("        nop\n");
     // The status only refreshes on the events that matter; stepping is one.
-    fixture.window.step_line();
+    step_to_next_line(fixture.window);
     RV_CHECK_NE(fixture.window.status_text().indexOf("not assembled"), -1);
 }
 
@@ -324,8 +389,8 @@ RV_TEST(gui, reset_keeps_breakpoints_and_restores_data) {
         "        sw zero, 0(a1)\n"
         "        ebreak\n");
     fixture.window.toggle_breakpoint(5);
-    fixture.window.step_line();
-    fixture.window.step_line();
+    step_to_next_line(fixture.window);
+    step_to_next_line(fixture.window);
     RV_CHECK_HEX(fixture.session().read_dmem_word(0), 0u);
 
     fixture.window.reset_machine();
@@ -341,7 +406,7 @@ RV_TEST(gui, interrupts_are_visible_in_the_io_panel) {
         "        li t1, 50\n"
         "        sw t1, 0(t0)\n"
         "        ebreak\n");
-    for (int i = 0; i < 3; ++i) fixture.window.step_line();
+    for (int i = 0; i < 3; ++i) step_to_next_line(fixture.window);
 
     RV_CHECK(fixture.session().hart().bus().timer()->armed());
     RV_CHECK_HEX(fixture.session().hart().bus().timer()->compare(), 50u);
@@ -379,12 +444,12 @@ RV_TEST(gui, adding_and_removing_a_peripheral_updates_the_machine) {
     RV_CHECK(bus.device_at_slot(9) != nullptr);
 
     // The panel picks it up on the next refresh, which every step triggers.
-    fixture.window.step_line();
+    step_to_next_line(fixture.window);
     auto* list = fixture.window.findChild<DevicePanel*>()->findChild<QTableWidget*>();
     RV_CHECK_EQ(list->rowCount(), static_cast<int>(before + 1));
 
     bus.detach(9);
-    fixture.window.step_line();
+    step_to_next_line(fixture.window);
     RV_CHECK_EQ(list->rowCount(), static_cast<int>(before));
 }
 
@@ -463,8 +528,8 @@ RV_TEST(gui, a_step_does_not_rebuild_the_controls_underneath_the_user) {
     QPointer<QCheckBox> box = panel->findChildren<QCheckBox*>().back();
     RV_CHECK(!box.isNull());
 
-    fixture.window.step_line();
-    fixture.window.step_line();
+    step_to_next_line(fixture.window);
+    step_to_next_line(fixture.window);
     RV_CHECK(!box.isNull());
 }
 
@@ -494,7 +559,7 @@ RV_TEST(gui, an_overlapping_device_is_allowed_and_shown_as_covered) {
     RV_CHECK(ram != nullptr);
     RV_CHECK(leds != nullptr);
 
-    fixture.window.step_line();
+    step_to_next_line(fixture.window);
     auto* panel = fixture.window.findChild<DevicePanel*>();
     QTableWidget* list = panel->findChild<QTableWidget*>();
     RV_CHECK_EQ(list->rowCount(), 2);
@@ -533,7 +598,7 @@ RV_TEST(gui, a_size_a_file_names_is_shown_even_when_the_list_lacks_it) {
     Fixture fixture;
     fixture.session().hart().resize_memories(5120, 16 * 1024);
     fixture.window.show_tab("Memory");
-    fixture.window.step_line();
+    step_to_next_line(fixture.window);
 
     QComboBox* imem = fixture.window.findChildren<QComboBox*>().front();
     RV_CHECK_EQ(imem->currentData().toUInt(), 5120u);
@@ -819,7 +884,7 @@ RV_TEST(gui, a_bank_is_offered_at_the_widths_hardware_comes_in) {
     auto* leds = static_cast<core::LedDevice*>(bus.attach(0, core::make_device("leds", 8)));
     RV_CHECK_EQ(leds->width(), 8);
 
-    fixture.window.step_line();
+    step_to_next_line(fixture.window);
     QTableWidget* list = fixture.window.findChild<DevicePanel*>()->findChild<QTableWidget*>();
     // Eight lights shown, not thirty-two that do not exist.
     RV_CHECK_EQ(list->item(0, 4)->text().trimmed().size(), QString("00000000  ........").size());
@@ -983,4 +1048,247 @@ int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication app(argc, argv);
     return rvtest::run_all(argc, argv);
+}
+
+// ---------------------------------------------------------------------------
+// The pipeline panel
+// ---------------------------------------------------------------------------
+
+RV_TEST(gui, the_pipeline_panel_names_the_stage_of_each_instruction) {
+    Fixture fixture;
+    auto* panel = fixture.window.findChild<PipelineWidget*>();
+    RV_CHECK(panel != nullptr);
+
+    // Freshly assembled: nothing is in flight yet, so every stage is a bubble.
+    RV_CHECK(has(panel->stage_summary(), "IF=-"));
+    RV_CHECK(has(panel->stage_summary(), "EX=-"));
+
+    fixture.window.step();
+    RV_CHECK(has(panel->stage_summary(), "IF=addi"));
+    RV_CHECK(has(panel->stage_summary(), "ID=-"));
+
+    // Five cycles in, the first instruction has reached write-back, which is
+    // where it becomes part of the machine.
+    for (int i = 0; i < 4; ++i) fixture.window.step();
+    RV_CHECK(has(panel->stage_summary(), "WB=addi"));
+    RV_CHECK_EQ(fixture.session().cpu().instret, 1u);
+    RV_CHECK_HEX(fixture.session().cpu().x[10], 1u);
+
+    // Actually draw it. stage_summary() reports what the strip says, but the
+    // space-time diagram underneath has geometry of its own, and nothing else
+    // here would notice it walking off the end of a row.
+    RV_CHECK(!panel->grab().isNull());
+}
+
+RV_TEST(gui, the_pipeline_panel_draws_a_run_long_enough_to_flush) {
+    // A loop, so the diagram has more cycles than columns and at least one
+    // branch resolves the other way. Drawing it is the assertion.
+    Fixture fixture(
+        "_start: li   a0, 4\n"
+        "loop:   addi a0, a0, -1\n"
+        "        bne  a0, x0, loop\n"
+        "        ebreak\n");
+    auto* panel = fixture.window.findChild<PipelineWidget*>();
+    RV_CHECK(panel != nullptr);
+
+    for (int i = 0; i < 60; ++i) fixture.window.step();
+    RV_CHECK(fixture.session().halted());
+    RV_CHECK(!panel->grab().isNull());
+    // Halted, and everything that was in flight has walked out the far end.
+    RV_CHECK(has(panel->stage_summary(), "IF=-"));
+    RV_CHECK(has(panel->stage_summary(), "WB=-"));
+    RV_CHECK_HEX(fixture.session().cpu().x[10], 0u);
+}
+
+RV_TEST(gui, back_cycle_undoes_one_cycle) {
+    Fixture fixture;
+    for (int i = 0; i < 5; ++i) fixture.window.step();
+    RV_CHECK_EQ(fixture.session().cpu().instret, 1u);
+
+    fixture.window.step_back();
+    RV_CHECK_EQ(fixture.session().cpu().instret, 0u);
+
+    auto* panel = fixture.window.findChild<PipelineWidget*>();
+    RV_CHECK(panel != nullptr);
+    RV_CHECK(has(panel->stage_summary(), "WB=-"));
+    RV_CHECK(has(panel->stage_summary(), "MEM=addi"));
+}
+
+RV_TEST(gui, a_source_line_step_leaves_the_pipeline_showing_what_just_ran) {
+    // F8 goes through the session rather than the pipeline, so the panel has to
+    // adopt where the machine ended up instead of going blank.
+    Fixture fixture;
+    step_to_next_line(fixture.window);
+
+    auto* panel = fixture.window.findChild<PipelineWidget*>();
+    RV_CHECK(panel != nullptr);
+    RV_CHECK(has(panel->stage_summary(), "WB=addi"));
+    RV_CHECK(has(panel->stage_summary(), "MEM=lui"));
+}
+
+RV_TEST(gui, the_pipeline_tab_is_selectable) {
+    Fixture fixture;
+    fixture.window.show_tab("Pipeline");
+    auto* panel = fixture.window.findChild<PipelineWidget*>();
+    RV_CHECK(panel != nullptr);
+    RV_CHECK(panel->isVisibleTo(&fixture.window));
+}
+
+// ---------------------------------------------------------------------------
+// The same pipeline, drawn on the code itself
+// ---------------------------------------------------------------------------
+
+RV_TEST(gui, the_editor_tints_the_lines_that_are_in_flight) {
+    // kProgram: line 4 is `li a0, 1`, line 5 the two-word `li a1, 0x12345`.
+    Fixture fixture;
+    RV_CHECK(fixture.window.pipeline_colours());
+    RV_CHECK(fixture.editor().pipeline_lines().empty());  // nothing fetched yet
+
+    fixture.window.step();
+    RV_CHECK_EQ(fixture.editor().pipeline_lines().size(), std::size_t{1});
+    RV_CHECK_EQ(depth_of(fixture.editor(), 4), 0);
+
+    fixture.window.step();
+    RV_CHECK_EQ(depth_of(fixture.editor(), 4), 1);
+    RV_CHECK_EQ(depth_of(fixture.editor(), 5), 0);
+}
+
+RV_TEST(gui, the_tint_darkens_as_the_instruction_moves_down_the_pipe) {
+    // One shade per stage, brightest where it was just fetched -- so a line
+    // fades out over the five cycles it takes to cross.
+    Fixture fixture;
+    for (int expected = 0; expected < 5; ++expected) {
+        fixture.window.step();
+        RV_CHECK_EQ(depth_of(fixture.editor(), 4), expected);
+    }
+    fixture.window.step();
+    RV_CHECK_EQ(depth_of(fixture.editor(), 4), -1);  // out the far end
+}
+
+RV_TEST(gui, a_two_word_line_takes_the_stage_of_its_furthest_instruction) {
+    // `li a1, 0x12345` is lui + addi. The shading follows the stages strictly,
+    // not the source line as a unit: with lui in ID and addi still in IF, the
+    // line is at ID, because that is where the pipeline has got to on it.
+    Fixture fixture;
+    for (int i = 0; i < 3; ++i) fixture.window.step();
+    RV_CHECK_EQ(depth_of(fixture.editor(), 5), 1);
+
+    fixture.window.step();
+    RV_CHECK_EQ(depth_of(fixture.editor(), 5), 2);
+}
+
+RV_TEST(gui, a_taken_branch_turns_its_line_green_once_it_resolves) {
+    Fixture fixture(
+        "_start: li   a0, 0\n"        // line 1
+        "        beq  a0, x0, out\n"  // line 2, taken
+        "        li   a1, 99\n"       // line 3
+        "out:    ebreak\n");          // line 4
+
+    for (int i = 0; i < 5; ++i) fixture.window.step();
+    // In flight, but it has not run yet, so the line claims nothing.
+    RV_CHECK_EQ(depth_of(fixture.editor(), 2), 3);
+    RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::Pending);
+
+    fixture.window.step();  // it writes back, and the answer exists
+    RV_CHECK_EQ(depth_of(fixture.editor(), 2), 4);
+    RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::Taken);
+}
+
+RV_TEST(gui, a_branch_that_falls_through_turns_its_line_red) {
+    Fixture fixture(
+        "_start: li   a0, 1\n"        // line 1
+        "        beq  a0, x0, out\n"  // line 2, not taken
+        "        li   a1, 99\n"       // line 3, and it really does run
+        "out:    ebreak\n");          // line 4
+
+    for (int i = 0; i < 6; ++i) fixture.window.step();
+    RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::NotTaken);
+    // Always-taken guessed wrong, so the fall-through it had thrown away is
+    // fetched all over again -- back at the start of the pipe.
+    RV_CHECK_EQ(depth_of(fixture.editor(), 3), 0);
+}
+
+RV_TEST(gui, an_ordinary_instruction_never_claims_a_direction) {
+    Fixture fixture;
+    for (int i = 0; i < 4; ++i) fixture.window.step();
+    RV_CHECK_EQ(depth_of(fixture.editor(), 4), 3);  // committed, in MEM
+    RV_CHECK(tone_of(fixture.editor(), 4) == PipelineTone::Pending);
+}
+
+RV_TEST(gui, the_editor_tint_turns_off_without_touching_the_panel) {
+    Fixture fixture;
+    for (int i = 0; i < 3; ++i) fixture.window.step();
+    RV_CHECK(!fixture.editor().pipeline_lines().empty());
+
+    fixture.window.set_pipeline_colours(false);
+    RV_CHECK(fixture.editor().pipeline_lines().empty());
+
+    // The panel is the other half of the same feature and keeps working.
+    auto* panel = fixture.window.findChild<PipelineWidget*>();
+    RV_CHECK(panel != nullptr);
+    RV_CHECK(has(panel->stage_summary(), "EX=addi"));
+
+    fixture.window.set_pipeline_colours(true);
+    RV_CHECK_EQ(depth_of(fixture.editor(), 4), 2);
+}
+
+RV_TEST(gui, a_line_thrown_away_by_the_guess_stops_being_marked_at_once) {
+    // The line after a branch is fetched from straight ahead, and dropped as
+    // soon as EX computes the target and the guess says otherwise. It must not
+    // be left marked on code that never runs.
+    Fixture fixture(
+        "_start: li   a0, 0\n"       // line 1
+        "        beq  a0, x0, out\n" // line 2, taken
+        "        li   a1, 99\n"      // line 3, fetched on the wrong path
+        "out:    ebreak\n");         // line 4
+    for (int i = 0; i < 3; ++i) fixture.window.step();
+    RV_CHECK_EQ(depth_of(fixture.editor(), 3), 0);  // fetched from straight ahead
+
+    fixture.window.step();  // the beq reaches EX and the target is known
+    RV_CHECK_EQ(depth_of(fixture.editor(), 3), -1);
+    RV_CHECK_EQ(depth_of(fixture.editor(), 4), 0);  // the target, fetched instead
+}
+
+RV_TEST(gui, a_source_line_step_leaves_every_stage_filled) {
+    // Driving with Step rather than Step Cycle used to leave MEM and WB empty.
+    Fixture fixture;
+    step_to_next_line(fixture.window);  // li a0, 1
+    step_to_next_line(fixture.window);  // li a1, 0x12345 -- two instructions
+
+    auto* panel = fixture.window.findChild<PipelineWidget*>();
+    RV_CHECK(panel != nullptr);
+    RV_CHECK(!has(panel->stage_summary(), "MEM=-"));
+    RV_CHECK(!has(panel->stage_summary(), "WB=-"));
+}
+
+RV_TEST(gui, only_the_finishing_line_is_coloured_the_rest_are_named) {
+    Fixture fixture;
+    for (int i = 0; i < 5; ++i) fixture.window.step();
+
+    // Line 4's instruction has reached the last stage, and that is the one line
+    // with a colour; the others are marked in the margin by name.
+    const PipelineMark* finishing = fixture.editor().pipeline_mark(4);
+    RV_CHECK(finishing != nullptr);
+    RV_CHECK_EQ(finishing->depth, 4);
+    RV_CHECK(fixture.editor().pipeline_mark(5) != nullptr);
+    RV_CHECK_NE(fixture.editor().pipeline_mark(5)->depth, 4);
+}
+
+RV_TEST(gui, the_branch_colours_turn_off_on_their_own) {
+    Fixture fixture(
+        "_start: li   a0, 0\n"
+        "        beq  a0, x0, out\n"
+        "        li   a1, 99\n"
+        "out:    ebreak\n");
+    for (int i = 0; i < 6; ++i) fixture.window.step();
+    RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::Taken);
+
+    fixture.window.set_branch_colours(false);
+    RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::Pending);
+    // The stage marking itself is untouched -- the two are independent.
+    RV_CHECK_EQ(depth_of(fixture.editor(), 2), 4);
+    RV_CHECK(fixture.window.pipeline_colours());
+
+    fixture.window.set_branch_colours(true);
+    RV_CHECK(tone_of(fixture.editor(), 2) == PipelineTone::Taken);
 }

@@ -74,7 +74,8 @@ int main(int argc, char** argv) {
     // window to a file and exit. Useful for documentation, and for checking
     // the layout without a display.
     QCommandLineOption screenshot("screenshot", "render one frame to <file> and exit", "file");
-    QCommandLineOption steps("steps", "step this many lines before rendering", "n", "0");
+    QCommandLineOption steps("steps", "advance this many pipeline cycles before rendering", "n",
+                             "0");
     QCommandLineOption tab("tab", "select a dock tab before rendering", "name");
     QCommandLineOption caret("caret", "put the caret at <line>:<col> before rendering", "pos");
     parser.addOption(screenshot);
@@ -113,7 +114,7 @@ int main(int argc, char** argv) {
     window.show();
 
     if (parser.isSet(screenshot)) {
-        for (int i = 0, n = parser.value(steps).toInt(); i < n; ++i) window.step_line();
+        for (int i = 0, n = parser.value(steps).toInt(); i < n; ++i) window.step();
         if (parser.isSet(tab)) window.show_tab(parser.value(tab));
         if (parser.isSet(caret)) {
             const QStringList parts = parser.value(caret).split(':');

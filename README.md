@@ -4,12 +4,18 @@
 
 An RV32IMC_Zicsr_Zifencei emulator, assembler and debugger built for **learning
 and teaching assembly**, with machine-mode interrupts. Not a fast emulator — a visible one. Every design decision
-serves three questions:
+serves four questions:
 
 1. **What exactly changed in this step?** — register and memory diff highlighting
 2. **How did this instruction become 16 or 32 bits?** — a bitfield breakdown
    panel, which for a compressed instruction also shows the one it expands to
 3. **Why did it not assemble?** — line, column, caret, and a suggested fix
+4. **Where is each instruction right now?** — the five pipeline stages with the
+   instruction in each, the space-time diagram underneath, and the same five
+   stages named in the editor margin beside the code, with the line being
+   written back in yellow and a branch in green or red once it knows whether it
+   was taken. Stepping by cycle rather than by instruction is what makes a
+   branch's cost visible
 
 The editor suggests the instruction in a small block under the caret that folds
 away once it is chosen, then greys the operands it still wants in after the caret — a form to
@@ -40,6 +46,15 @@ through what you wrote.
 | M6 | Embedded editor | ✅ done |
 | M7 | Encoding panel, diff highlighting, reverse step | ✅ done |
 | M8 | Polish, examples, docs | ✅ done |
+| M9 | Pipeline view: five stages, space-time diagram | ✅ done |
+
+The pipeline is a picture of the machine, not a re-timing of it: instructions
+still execute atomically — the view runs each one on the cycle it reaches
+write-back — `mcycle` still counts instructions, and the panel keeps its own
+cycle count. Branch targets are computed in EX and followed on an always-taken
+guess; the condition is only known when the instruction runs, so a wrong guess
+is caught at write-back and costs more than it would in hardware. Hazards,
+stalls and forwarding are not implemented yet.
 
 ## Building
 
@@ -200,7 +215,7 @@ the command-line debugger is a second shell over the same one.
 rv_isa    instruction table, encode, decode, disassemble    (no dependencies)
  ├── rv_core   registers, memory, MMIO, execute, traps, interrupts
  └── rv_asm    lexer, parser, assembler
-       └── rv_dbg    breakpoints, stepping, reverse step
+       └── rv_dbg    breakpoints, stepping, reverse step, the pipeline view
              └── rv_cmd    command registry + REPL, no Qt
                    ├── rv32-gui   the desktop window
                    └── rv32       the command-line tools
@@ -260,6 +275,11 @@ With no reference toolchain available, correctness comes from three sources:
   platform, driven through the actions the toolbar calls, then asked what it
   shows. No display needed, so it runs in CI, and it exercises the real path
   rather than a parallel one.
+- **The pipeline view against the machine** — a program driven a cycle at a
+  time must end in exactly the state it reaches driven an instruction at a
+  time: pc, `cycle`, `instret` and all 32 registers, for 32-bit and compressed
+  control flow alike. That is what stops a drawing from quietly becoming a
+  second implementation.
 
 ## License
 

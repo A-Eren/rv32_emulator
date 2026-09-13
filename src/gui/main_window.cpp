@@ -36,6 +36,7 @@
 #include "gui/editor_widget.hpp"
 #include "gui/device_panel.hpp"
 #include "gui/encoding_widget.hpp"
+#include "gui/pipeline_widget.hpp"
 #include "isa/disasm.hpp"
 #include "isa/regnames.hpp"
 
@@ -64,7 +65,9 @@ QString from(std::string_view text) {
 }  // namespace
 
 MainWindow::MainWindow(QWidget* parent)
-    : QMainWindow(parent), session_(std::make_unique<dbg::DebugSession>()) {
+    : QMainWindow(parent),
+      session_(std::make_unique<dbg::DebugSession>()),
+      pipeline_model_(*session_) {
     setWindowTitle("rv32");
     resize(1280, 820);
 
@@ -104,7 +107,8 @@ void MainWindow::build_layout() {
         QFontMetrics(mono()).height() + 4);
     registers_->setShowGrid(false);
 
-    encoding_ = new EncodingWidget(*session_, this);
+    encoding_ = new EncodingWidget(*session_, &pipeline_model_, this);
+    pipeline_ = new PipelineWidget(pipeline_model_, *session_, this);
 
     const auto make_text = [this] {
         auto* view = new QPlainTextEdit(this);
@@ -182,6 +186,7 @@ void MainWindow::build_layout() {
 
     dock_ = new QTabWidget(this);
     dock_->addTab(encoding_, "Encoding");
+    dock_->addTab(pipeline_, "Pipeline");
     dock_->addTab(memory_page, "Memory");
     dock_->addTab(console_, "Console");
     dock_->addTab(devices_, "Devices");
@@ -257,11 +262,9 @@ void MainWindow::build_actions() {
     add("Generate", QKeySequence("Ctrl+E"), &MainWindow::on_export_mem,
         "Write imem.mem and dmem.mem, padded to this machine's depth");
     toolbar->addSeparator();
-    add("Step", Qt::Key_F8, &MainWindow::step_line, "One source line, entering calls");
-    add("Step Instr", Qt::Key_F7, &MainWindow::step_instruction,
-        "One machine instruction — shows what a pseudo-instruction expands to");
-    add("Step Over", Qt::Key_F10, &MainWindow::step_over, "One source line, running calls");
-    action_back_ = add("Back", Qt::Key_F6, &MainWindow::step_back, "Undo one source line");
+    add("Step", Qt::Key_F8, &MainWindow::step,
+        "One pipeline cycle — an instruction takes effect when it reaches WB");
+    action_back_ = add("Back", Qt::Key_F6, &MainWindow::step_back, "Undo one pipeline cycle");
     add("Run", Qt::Key_F9, &MainWindow::run, "Run until something stops it");
     add("Reset", Qt::Key_F4, &MainWindow::reset_machine, "Restart, keeping breakpoints");
 
@@ -269,6 +272,103 @@ void MainWindow::build_actions() {
     for (QAction* action : toolbar->actions()) {
         if (!action->isSeparator()) run_menu->addAction(action);
     }
+
+    // Not on the toolbar: it is a preference about how the editor looks, not
+    // something you reach for while stepping, and the toolbar is already as
+    // wide as the window can spare.
+    auto* view_menu = menuBar()->addMenu("&View");
+    action_pipeline_colours_ = view_menu->addAction("Pipeline colours in the editor");
+    action_pipeline_colours_->setCheckable(true);
+    action_pipeline_colours_->setChecked(pipeline_colours_);
+    action_pipeline_colours_->setShortcut(QKeySequence("Ctrl+Shift+P"));
+    connect(action_pipeline_colours_, &QAction::toggled, this, &MainWindow::set_pipeline_colours);
+
+    action_branch_colours_ = view_menu->addAction("Green and red on a resolved branch");
+    action_branch_colours_->setCheckable(true);
+    action_branch_colours_->setChecked(branch_colours_);
+    action_branch_colours_->setShortcut(QKeySequence("Ctrl+Shift+B"));
+    connect(action_branch_colours_, &QAction::toggled, this, &MainWindow::set_branch_colours);
+}
+
+void MainWindow::set_pipeline_colours(bool on) {
+    pipeline_colours_ = on;
+    if (action_pipeline_colours_ != nullptr && action_pipeline_colours_->isChecked() != on) {
+        action_pipeline_colours_->setChecked(on);
+    }
+    // With nothing marked at all there is no branch to colour either.
+    if (action_branch_colours_ != nullptr) action_branch_colours_->setEnabled(on);
+    refresh_pipeline_marks();
+}
+
+void MainWindow::set_branch_colours(bool on) {
+    branch_colours_ = on;
+    if (action_branch_colours_ != nullptr && action_branch_colours_->isChecked() != on) {
+        action_branch_colours_->setChecked(on);
+    }
+    refresh_pipeline_marks();
+}
+
+namespace {
+
+/// What a slot says about itself in colour. Yellow unless it is a branch or a
+/// jump that has already run. Real hardware resolves the condition in EX, but
+/// this emulator executes a whole instruction at once, and that happens at
+/// write-back -- so write-back is the first cycle there is anything to claim.
+PipelineTone tone_of(const dbg::Slot& slot) {
+    if (!slot.committed || !slot.instr.valid()) return PipelineTone::Pending;
+    const isa::InstrGroup group = slot.instr.desc().group;
+    if (group != isa::InstrGroup::Branch && group != isa::InstrGroup::Jump) {
+        return PipelineTone::Pending;
+    }
+    return slot.redirected ? PipelineTone::Taken : PipelineTone::NotTaken;
+}
+
+}  // namespace
+
+// Where the arrow in the margin points: at the line that just wrote back, so
+// that it, the yellow mark and the encoding panel all agree. Before anything
+// has run there is nothing in write-back, and the pc is the honest answer.
+int MainWindow::execution_line() const {
+    const dbg::Slot& retired = pipeline_model_.at(dbg::Stage::WB);
+    if (retired.valid) {
+        if (const std::optional<u32> line = session_->map().line_of(retired.pc)) {
+            return static_cast<int>(*line);
+        }
+    }
+    return static_cast<int>(session_->current_line().value_or(0));
+}
+
+// Which source lines have an instruction in flight, and how far along it is.
+//
+// Strictly by stage: a line shows its *most advanced* instruction. The stages
+// decide, and the line is only where they happen to be drawn -- so when a
+// two-word pseudo-instruction straddles ID and EX, the line is at EX, because
+// that is the furthest the pipe has got on it -- see below, where
+// that is where the pipeline has got to on it.
+void MainWindow::refresh_pipeline_marks() {
+    if (!pipeline_colours_) {
+        editor_->set_pipeline_lines({});
+        return;
+    }
+
+    std::map<int, PipelineMark> deepest;
+    for (std::size_t depth = 0; depth < dbg::kNumStages; ++depth) {
+        const dbg::Slot& slot = pipeline_model_.at(static_cast<dbg::Stage>(depth));
+        if (!slot.valid) continue;
+        const std::optional<u32> line = session_->map().line_of(slot.pc);
+        if (!line.has_value()) continue;
+
+        const int number = static_cast<int>(*line);
+        const PipelineMark mark{number, static_cast<int>(depth),
+                                branch_colours_ ? tone_of(slot) : PipelineTone::Pending};
+        const auto found = deepest.find(number);
+        if (found == deepest.end() || mark.depth > found->second.depth) deepest[number] = mark;
+    }
+
+    std::vector<PipelineMark> marks;
+    marks.reserve(deepest.size());
+    for (const auto& [line, mark] : deepest) marks.push_back(mark);
+    editor_->set_pipeline_lines(std::move(marks));
 }
 
 // ---------------------------------------------------------------------------
@@ -374,6 +474,7 @@ void MainWindow::assemble() {
     session_->load_source(text.toStdString(), name, options);
     // The completer offers this program's labels as branch and load targets.
     editor_->set_symbols(&session_->symbols());
+    pipeline_model_.reset();
     encoding_->follow_pc();
     set_message(QString::asprintf("assembled: %zu instructions, %zu bytes of data",
                                   session_->program().map.entries().size(),
@@ -410,16 +511,20 @@ void MainWindow::report_stop(const dbg::StopEvent& event) {
     refresh_all();
 }
 
-void MainWindow::step_line() { report_stop(session_->step(dbg::StepKind::Line)); }
-void MainWindow::step_instruction() { report_stop(session_->step(dbg::StepKind::Instruction)); }
-void MainWindow::step_over() { report_stop(session_->step(dbg::StepKind::LineOver)); }
+// One step, and it is a cycle. A source line, a call, a whole program are all
+// some number of these -- there is nothing a separate control would express
+// that holding this one down does not, and every extra button was a second way
+// to ask the same question.
+void MainWindow::step() { report_stop(pipeline_model_.tick()); }
 
 void MainWindow::step_back() {
-    if (!session_->can_reverse()) {
-        set_message("no further history", true);
+    if (!pipeline_model_.reverse_tick()) {
+        set_message("no further history: this pipeline has not run a cycle yet", true);
         return;
     }
-    report_stop(session_->reverse_step(dbg::StepKind::Line));
+    // Going back is never itself a reason to stop, so there is no event to
+    // report -- a plain Step is what clears the message and repaints.
+    report_stop(dbg::StopEvent{});
 }
 
 void MainWindow::run() {
@@ -439,17 +544,21 @@ void MainWindow::run() {
 
 void MainWindow::on_run_slice() {
     if (const auto event = session_->run_chunk(kRunChunk)) {
+        pipeline_model_.resync();
         report_stop(*event);
         return;
     }
     // Still going: keep the panels current so a long run is watchable.
+    pipeline_model_.resync();
     refresh_registers();
     refresh_status();
+    pipeline_->update();
 }
 
 void MainWindow::reset_machine() {
     run_timer_->stop();
     session_->reset();
+    pipeline_model_.reset();
     encoding_->follow_pc();
     set_message("machine reset; breakpoints kept");
     refresh_all();
@@ -483,10 +592,12 @@ void MainWindow::refresh_all() {
         if (breakpoint.enabled) breakpoints.push_back(static_cast<int>(breakpoint.line));
     }
     editor_->set_breakpoint_lines(std::move(breakpoints));
-    editor_->set_execution_line(static_cast<int>(session_->current_line().value_or(0)));
+    editor_->set_execution_line(execution_line());
 
-    action_back_->setEnabled(session_->can_reverse());
+    action_back_->setEnabled(pipeline_model_.can_reverse());
+    refresh_pipeline_marks();
     encoding_->update();
+    pipeline_->update();
 }
 
 void MainWindow::refresh_registers() {

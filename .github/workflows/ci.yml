@@ -62,7 +62,15 @@ jobs:
       - name: Render one GUI frame headlessly
         env:
           QT_QPA_PLATFORM: offscreen
-        run: ./build/${{ matrix.preset }}/rv32-gui examples/fib.s --screenshot /tmp/rv32.png --steps 6
+        run: |
+          set -e
+          gui=./build/${{ matrix.preset }}/rv32-gui
+          $gui examples/fib.s --screenshot /tmp/rv32.png --steps 6
+          # Again with the pipeline panel on screen and enough cycles for the
+          # loop to flush a branch, because a panel only paints when it is the
+          # visible tab -- a frame that never draws it proves nothing about it.
+          $gui examples/fib.s --screenshot /tmp/rv32-pipeline.png --steps 32 --tab Pipeline
+          test -s /tmp/rv32-pipeline.png
 
   # -------------------------------------------------------------------------
   # The Windows build, and the download that comes out of it.

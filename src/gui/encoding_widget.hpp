@@ -13,6 +13,7 @@
 
 #include <QWidget>
 
+#include "dbg/pipeline.hpp"
 #include "dbg/session.hpp"
 
 namespace rv::gui {
@@ -21,7 +22,11 @@ class EncodingWidget final : public QWidget {
     Q_OBJECT
 
 public:
-    explicit EncodingWidget(const dbg::DebugSession& session, QWidget* parent = nullptr);
+    /// The pipeline is optional only so this widget can still be built without
+    /// one; when it is there, the panel follows what wrote back rather than the
+    /// pc, which by then is four stages further on.
+    EncodingWidget(const dbg::DebugSession& session, const dbg::Pipeline* pipeline,
+                   QWidget* parent = nullptr);
 
     /// Show a specific address rather than the pc. Used when the caret moves.
     void set_address(Addr addr);
@@ -38,6 +43,7 @@ private:
     Addr shown_address() const;
 
     const dbg::DebugSession* session_;
+    const dbg::Pipeline* pipeline_;
     Addr address_ = 0;
     bool follow_pc_ = true;
 };

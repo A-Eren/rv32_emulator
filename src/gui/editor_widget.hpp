@@ -21,6 +21,25 @@ namespace rv::gui {
 
 class EditorWidget;
 
+/// Which hue a line is tinted in. Yellow is the ordinary case; a branch that
+/// has reached EX has an answer, and says which way it went.
+enum class PipelineTone : unsigned char { Pending, Taken, NotTaken };
+
+/// A source line with an instruction in flight, how far down the pipe that
+/// instruction has got -- 0 is the stage it was just fetched into, 4 the one
+/// where it writes back -- and what it turned out to do. The editor turns that
+/// into a name in the margin, and a background on the two depths worth one; it
+/// does not need to know what the stages are called.
+struct PipelineMark {
+    int line = 0;
+    int depth = 0;
+    PipelineTone tone = PipelineTone::Pending;
+
+    bool operator==(const PipelineMark& other) const {
+        return line == other.line && depth == other.depth && tone == other.tone;
+    }
+};
+
 /// The small block under the caret listing the instructions that match what is
 /// being typed. It is only up while a mnemonic is being written: once the
 /// instruction is settled the operands take over as ghost text and the block
@@ -98,7 +117,19 @@ public:
     const std::vector<int>& overflow_lines() const { return overflow_; }
 
     void set_execution_line(int line);
+    /// The line the arrow in the margin is on. 0 when there is none.
+    int execution_line() const { return execution_line_; }
     void set_breakpoint_lines(std::vector<int> lines);
+
+    /// Mark the lines whose instructions are in the pipeline: the stage named
+    /// in the margin, and a background only on the line writing back or on a
+    /// branch that has resolved. An empty list turns the marking off, which is
+    /// how the menu toggle works.
+    void set_pipeline_lines(std::vector<PipelineMark> marks);
+    const std::vector<PipelineMark>& pipeline_lines() const { return pipeline_; }
+    /// What is in flight on `line`, or null. Used by the gutter, and by the
+    /// tests to ask what a line is showing.
+    const PipelineMark* pipeline_mark(int line) const;
 
     int current_line() const;
     void go_to_line(int line);
@@ -159,6 +190,7 @@ private:
     std::map<int, as::Diagnostic> diagnostics_;
     std::vector<int> breakpoints_;
     std::vector<int> overflow_;
+    std::vector<PipelineMark> pipeline_;
     QString overflow_reason_;
     int execution_line_ = 0;
 };

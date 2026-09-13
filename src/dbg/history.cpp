@@ -36,6 +36,12 @@ void StepHistory::record(const core::StepOutcome& outcome, const core::Hart& /*h
     if (depth_ < deltas_.size()) ++depth_;
 }
 
+const StepDelta* StepHistory::recent(std::size_t back) const {
+    if (back >= depth_) return nullptr;
+    const std::size_t size = deltas_.size();
+    return &deltas_[(next_ + size - 1 - back) % size];
+}
+
 bool StepHistory::undo(core::Hart& hart) {
     if (depth_ == 0) return false;
 

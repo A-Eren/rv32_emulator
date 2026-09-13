@@ -12,6 +12,7 @@
 #include <memory>
 
 #include "asm/diagnostic.hpp"
+#include "dbg/pipeline.hpp"
 #include "dbg/session.hpp"
 
 class QAction;
@@ -28,6 +29,7 @@ namespace rv::gui {
 
 class EditorWidget;
 class EncodingWidget;
+class PipelineWidget;
 class DevicePanel;
 
 class MainWindow final : public QMainWindow {
@@ -58,13 +60,24 @@ public:
     // Exposed so the offscreen tests can drive the window the way a person
     // would, rather than reaching into its internals.
     void assemble();
-    void step_line();
-    void step_instruction();
-    void step_over();
-    void run();
+    /// One pipeline cycle forward, and one back. The only two there are: a
+    /// cycle is the machine's real granularity now, and a source line or a
+    /// call is a number of them rather than a separate kind of stepping.
+    void step();
     void step_back();
+    void run();
     void reset_machine();
     void toggle_breakpoint(int line);
+
+    /// Tint the source lines whose instructions are in the pipeline. On by
+    /// default; the View menu turns it off without touching the panel.
+    void set_pipeline_colours(bool on);
+    bool pipeline_colours() const { return pipeline_colours_; }
+
+    /// Colour a branch green or red once it has resolved. Independent of the
+    /// stage marking above, and off leaves a branch looking like anything else.
+    void set_branch_colours(bool on);
+    bool branch_colours() const { return branch_colours_; }
 
     dbg::DebugSession& session() { return *session_; }
     EditorWidget& editor() { return *editor_; }
@@ -108,11 +121,16 @@ private:
     void refresh_symbols();
     void refresh_diagnostics();
     void refresh_status();
+    void refresh_pipeline_marks();
+    int execution_line() const;
     void report_stop(const dbg::StopEvent& event);
     void set_message(const QString& text, bool is_error = false);
     bool confirm_discard();
 
     std::unique_ptr<dbg::DebugSession> session_;
+    /// The five-stage picture of that session. A view of the machine, not a
+    /// second machine: it commits through the session like everything else.
+    dbg::Pipeline pipeline_model_;
     /// Diagnostics from the last assemble *attempt*, successful or not. A
     /// failed attempt never reaches the session -- that is deliberate, so a
     /// broken edit cannot destroy the loaded program -- so its errors have to
@@ -121,6 +139,7 @@ private:
 
     EditorWidget* editor_ = nullptr;
     EncodingWidget* encoding_ = nullptr;
+    PipelineWidget* pipeline_ = nullptr;
     QTableWidget* registers_ = nullptr;
     QTableWidget* memory_ = nullptr;
     QComboBox* imem_size_ = nullptr;
@@ -136,6 +155,10 @@ private:
     QLabel* message_ = nullptr;
 
     QAction* action_back_ = nullptr;
+    QAction* action_pipeline_colours_ = nullptr;
+    QAction* action_branch_colours_ = nullptr;
+    bool pipeline_colours_ = true;
+    bool branch_colours_ = true;
 
     /// Drives a long `run` in slices so the window stays responsive without a
     /// worker thread -- speed is not a goal here, and a thread would buy a
